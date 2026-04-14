@@ -7,7 +7,8 @@ Follow the installation guide for server [here](#install)
 - Run launch.sh or launch.bat (either via terminal or double-clicking)
 - Go to http://localhost:8000 on your browser (make sure its http and not https)
 
-## Installation guide:(#install)
+## Installation guide:
+<a name="install"></a>
 ### Prerequisites
 - python
 - pip
