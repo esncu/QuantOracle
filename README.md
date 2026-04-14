@@ -10,13 +10,13 @@ FYP for Diploma in I.T. FYP
 ### Prerequisites
 - python
 - pip
-- 
+  
 if nvidia gpu:
 - cuda
-- 
+  
 if AMD GPU:
 - ROCm
-
+  
 ### Steps
 1) Follow this guide: https://pytorch.org/get-started/locally/
-2) run `pip install matplotlib passlib[bcrypt]` in your terminal
+2) run `pip install matplotlib passlib[bcrypt] fastapi[standard]` in your terminal
