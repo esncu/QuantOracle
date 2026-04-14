@@ -3,8 +3,8 @@ FYP for Diploma in I.T. FYP
 
 ## Starter guide:
 ### apitest
-- Run main.py (either via terminal or double-clicking)
-- Go to localhost:8067/index on your browser
+- Run launch.sh or launch.bat (either via terminal or double-clicking)
+- Go to http://localhost:8000 on your browser (make sure its http and not https)
 
 ## Installation guide:
 ### Prerequisites
