@@ -2,11 +2,12 @@
 FYP for Diploma in I.T. FYP
 
 ## Starter guide:
+Follow the installation guide for server [here](#install)
 ### apitest
 - Run launch.sh or launch.bat (either via terminal or double-clicking)
 - Go to http://localhost:8000 on your browser (make sure its http and not https)
 
-## Installation guide:
+## Installation guide:(#install)
 ### Prerequisites
 - python
 - pip
