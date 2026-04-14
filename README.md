@@ -13,7 +13,7 @@ Follow the installation guide for server [here](#install)
 - python
 - pip
   
-if nvidia gpu:
+if NVIDIA GPU:
 - cuda
   
 if AMD GPU:
