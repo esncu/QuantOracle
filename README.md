@@ -4,14 +4,16 @@ FYP for Diploma in I.T. FYP
 ## Starter guide:
 Follow the installation guide for server [here](#install)
 ### apitest
-- Run launch.sh or launch.bat (either via terminal or double-clicking)
+- Run launch_linux.sh or launch_windows.ps1 (either via terminal or double-clicking)
 - Go to http://localhost:8000 on your browser (make sure its http and not https)
 
 ## Installation guide:
 <a name="install"></a>
 ### Prerequisites
+#### Note for Windows: Use PowerShell, not Command Prompt (CMD)
 - python
 - pip
+- docker-cli
   
 if NVIDIA GPU:
 - cuda
