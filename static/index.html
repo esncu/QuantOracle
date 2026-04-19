@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Hello World!</h1>
+    <p id='message'>Loading message...</p>
+    <p id='query'>Loading sent query...</p>
+  </body>
+  <script>
+    const tag = 'hi', query = 'This is an example query. Change me!'; // change tag too!
+    fetch('http://localhost:8000/test/' + tag + '?query=' + query)
+      .then(response =>{
+        if (!response.ok) throw new Error('Network response brokey');
+        return response.json();
+      })
+      .then(data =>{
+        document.getElementById('message').textContent = data.message;
+        document.getElementById('query').textContent = data.query;
+        if(data.extra)
+          console.log(data.extra);
+      })
+      .catch(error => console.error('Error (from the !response.ok thing from the first then):', error));
+  </script>
+</html>

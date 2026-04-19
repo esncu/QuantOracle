@@ -1,6 +1,8 @@
 CREATE USER backend_user WITH PASSWORD 'user123'; -- Create a new user named backend_user with the password 'user123'
 CREATE DATABASE myapp; -- Create a new database named myapp
-GRANT CONNECT ON DATABASE myapp TO backend_user;
+
+\c myapp
+
 GRANT ALL PRIVILEGES ON SCHEMA public TO backend_user;
 
 CREATE TABLE test (id SERIAL, name VARCHAR(30)); -- Create a new table named test with an auto-incrementing id and a name field
