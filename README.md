@@ -2,8 +2,7 @@
 FYP for Diploma in I.T. FYP
 
 ## Starter guide:
-Follow the installation guide for server [here](#install)
-### apitest
+- Follow the installation guide for server [here](#install)
 - Run launch_linux.sh or launch_windows.ps1 (either via terminal or double-clicking)
 - Go to http://localhost:8000 on your browser (make sure its http and not https)
 
@@ -23,4 +22,4 @@ if AMD GPU:
   
 ### Steps
 1) Follow this guide: https://pytorch.org/get-started/locally/
-2) run `pip install matplotlib passlib[bcrypt] fastapi[standard]` in your terminal
+2) run `pip install matplotlib passlib[bcrypt] fastapi[standard] psycopg2-binary` in your terminal
