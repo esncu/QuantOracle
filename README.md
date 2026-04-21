@@ -22,4 +22,4 @@ if AMD GPU:
   
 ### Steps
 1) Follow this guide: https://pytorch.org/get-started/locally/
-2) run `pip install matplotlib passlib[bcrypt] fastapi[standard] psycopg2-binary` in your terminal
+2) run `pip install matplotlib passlib[bcrypt] fastapi[standard] psycopg2-binary requests` in your terminal
