@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>QuantOracle | Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <style>
+        .status-box { width: 35px; height: 35px; border-radius: 4px; display: inline-block; cursor: pointer; transition: 0.2s; }
+        .is-trained { background-color: #48c78e; }
+        .is-untrained { background-color: #f14668; }
+        .status-box:hover { opacity: 0.8; transform: scale(1.05); }
+        .index-row { border-bottom: 1px solid #eee; padding: 15px 0; }
+    </style>
+</head>
+<body class="has-background-light">
+    <nav class="navbar is-dark">
+        <div class="container">
+            <div class="navbar-brand"><span class="navbar-item has-text-weight-bold">QuantOracle</span></div>
+            <div class="navbar-end">
+                <a class="navbar-item">Home</a><a class="navbar-item">Settings</a>
+                <a class="navbar-item" id="userDisplay">User</a>
+                <a href="login.html" class="navbar-item button is-primary">Login</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="section">
+        <div class="container">
+            <div class="box p-6">
+                <div class="columns is-mobile has-text-centered has-text-weight-bold grey-light">
+                    <div class="column is-4 has-text-left">Index</div>
+                    <div class="column">5M</div><div class="column">1H</div><div class="column">1D</div><div class="column">1W</div>
+                    <div class="column is-narrow"><div style="width: 30px;"></div></div>
+                </div>
+
+                <div class="columns is-vcentered is-mobile index-row">
+                    <div class="column is-4"><p class="title is-5">NVDA</p></div>
+                    <div class="column has-text-centered"><div class="status-box is-trained"></div></div>
+                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
+                    <div class="column has-text-centered">
+                        <a id="nvdaLink" class="status-box is-trained"></a>
+                    </div>
+                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
+                    <div class="column is-narrow"><button class="button is-white">🗑️</button></div>
+                </div>
+
+                <div class="columns is-vcentered is-mobile index-row">
+                    <div class="column is-4"><p class="title is-5">AAPL</p></div>
+                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
+                    <div class="column has-text-centered"><div class="status-box is-trained"></div></div>
+                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
+                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
+                    <div class="column is-narrow"><button class="button is-white">🗑️</button></div>
+                </div>
+
+                <div class="mt-5"><input class="input" type="text" placeholder="Track new index...."></div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const session = params.get('session') || 'GUEST';
+        document.getElementById('userDisplay').innerText = `Session: ${session}`;
+        // Set dynamic link for NVDA
+        document.getElementById('nvdaLink').href = `chart.html?session=${session}&index=NVDA&time=1D`;
+    </script>
+</body>
+</html>

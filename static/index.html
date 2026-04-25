@@ -1,23 +1,21 @@
 <!DOCTYPE html>
-<html>
-  <body>
-    <h1>Hello World!</h1>
-    <p id='message'>Loading message...</p>
-    <p id='query'>Loading sent query...</p>
-  </body>
-  <script>
-    const tag = 'hi', query = 'This is an example query. Change me!'; // change tag too!
-    fetch('http://localhost:8000/test/' + tag + '?query=' + query)
-      .then(response =>{
-        if (!response.ok) throw new Error('Network response brokey');
-        return response.json();
-      })
-      .then(data =>{
-        document.getElementById('message').textContent = data.message;
-        document.getElementById('query').textContent = data.query;
-        if(data.extra)
-          console.log(data.extra);
-      })
-      .catch(error => console.error('Error (from the !response.ok thing from the first then):', error));
-  </script>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>QuantOracle | Home</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <style>
+        body { background: linear-gradient(135deg, #00d1b2 0%, #004d40 100%); min-height: 100vh; display: flex; align-items: center; }
+    </style>
+</head>
+<body>
+    <div class="container has-text-centered">
+        <h1 class="title is-1 has-text-white">QuantOracle</h1>
+        <p class="subtitle has-text-light mb-6">Advanced Quantitative Data Oracle</p>
+        <div class="buttons is-centered">
+            <a href="dashboard.html?session=7829-QX-99" class="button is-white is-large is-rounded">Go to Dashboard</a>
+            <a href="chart.html?session=7829-QX-99&index=NVDA&time=1D" class="button is-dark is-large is-rounded">View Live Chart</a>
+        </div>
+    </div>
+</body>
 </html>

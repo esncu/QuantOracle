@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantOracle | Login</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+</head>
+<body class="has-background-light">
+    <section class="section">
+        <div class="container">
+            <div class="columns is-centered">
+                <div class="column is-4">
+                    <div class="tabs is-centered">
+                        <ul>
+                            <li class="is-active" id="userTab"><a onclick="showUserLogin()">User</a></li>
+                            <li id="adminTab"><a onclick="showAdminLogin()">Admin</a></li>
+                        </ul>
+                    </div>
+                    
+                    <div id="userSection" class="box">
+                        <h1 class="title has-text-centered">User Login</h1>
+                        <div id="loginMessage" class="notification is-hidden"></div>
+                        <form id="userLoginForm">
+                            <div class="field">
+                                <label class="label">Username</label>
+                                <div class="control">
+                                    <input id="userLoginUsername" class="input" type="text" placeholder="Username" required>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label class="label">Password</label>
+                                <div class="control">
+                                    <input id="userLoginPassword" class="input" type="password" placeholder="Password" required>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <div class="control">
+                                    <button type="submit" class="button is-primary is-fullwidth">Login</button>
+                                </div>
+                            </div>
+                        </form>
+                        <hr>
+                        <h2 class="subtitle has-text-centered">Register</h2>
+                        <form id="registerForm">
+                            <div class="field">
+                                <label class="label">Username</label>
+                                <div class="control">
+                                    <input id="registerUsername" class="input" type="text" placeholder="Username" required>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label class="label">Email</label>
+                                <div class="control">
+                                    <input id="registerEmail" class="input" type="email" placeholder="Email" required>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label class="label">Password</label>
+                                <div class="control">
+                                    <input id="registerPassword" class="input" type="password" placeholder="Password" required>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <div class="control">
+                                    <button type="submit" class="button is-link is-fullwidth">Register</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                    
+                    <div id="adminSection" class="box" style="display: none;">
+                        <h1 class="title has-text-centered">Admin Login</h1>
+                        <form id="adminLoginForm">
+                            <div class="field">
+                                <label class="label">Admin Username</label>
+                                <div class="control">
+                                    <input id="adminLoginUsername" class="input" type="text" placeholder="Admin Username" required>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label class="label">Admin Password</label>
+                                <div class="control">
+                                    <input id="adminLoginPassword" class="input" type="password" placeholder="Admin Password" required>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <div class="control">
+                                    <button type="submit" class="button is-danger is-fullwidth">Admin Login</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    
+    <script>
+        function showUserLogin() {
+            document.getElementById('userSection').style.display = 'block';
+            document.getElementById('adminSection').style.display = 'none';
+            document.getElementById('userTab').classList.add('is-active');
+            document.getElementById('adminTab').classList.remove('is-active');
+        }
+        
+        function showAdminLogin() {
+            document.getElementById('userSection').style.display = 'none';
+            document.getElementById('adminSection').style.display = 'block';
+            document.getElementById('userTab').classList.remove('is-active');
+            document.getElementById('adminTab').classList.add('is-active');
+        }
+
+        function setMessage(message, type = 'is-info') {
+            const messageBox = document.getElementById('loginMessage');
+            messageBox.className = `notification ${type}`;
+            messageBox.textContent = message;
+            messageBox.classList.remove('is-hidden');
+        }
+
+        document.getElementById('userLoginForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const username = document.getElementById('userLoginUsername').value.trim();
+            const password = document.getElementById('userLoginPassword').value.trim();
+            if (!username || !password) {
+                setMessage('Please enter both username and password.', 'is-warning');
+                return;
+            }
+            setMessage('Logged in as user. Redirecting...', 'is-success');
+            window.location.href = 'dashboard.html?session=userdemo';
+        });
+
+        document.getElementById('registerForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const username = document.getElementById('registerUsername').value.trim();
+            const email = document.getElementById('registerEmail').value.trim();
+            const password = document.getElementById('registerPassword').value.trim();
+            if (!username || !email || !password) {
+                setMessage('Please complete all registration fields.', 'is-warning');
+                return;
+            }
+            setMessage('Registration complete. Logging in...', 'is-success');
+            window.location.href = 'dashboard.html?session=userdemo';
+        });
+
+        document.getElementById('adminLoginForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            const username = document.getElementById('adminLoginUsername').value.trim();
+            const password = document.getElementById('adminLoginPassword').value.trim();
+            if (!username || !password) {
+                setMessage('Please enter both admin username and password.', 'is-warning');
+                return;
+            }
+            setMessage('Logged in as admin. Redirecting...', 'is-success');
+            window.location.href = 'dashboard.html?session=admindemo';
+        });
+    </script>
+</body>
+</html>
