@@ -1,0 +1,12 @@
+services:
+  quantoracle:
+    image: postgres
+    container_name: QuantOracle 
+    environment:
+      POSTGRES_PASSWORD: quOcle 
+      POSTGRES_USER: postgres
+      POSTGRES_DB: stocks 
+    ports:
+      - "5431:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql 
