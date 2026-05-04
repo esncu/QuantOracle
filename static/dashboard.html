@@ -13,16 +13,7 @@
     </style>
 </head>
 <body class="has-background-light">
-    <nav class="navbar is-dark">
-        <div class="container">
-            <div class="navbar-brand"><span class="navbar-item has-text-weight-bold">QuantOracle</span></div>
-            <div class="navbar-end">
-                <a class="navbar-item">Home</a><a class="navbar-item">Settings</a>
-                <a class="navbar-item" id="userDisplay">User</a>
-                <a href="login.html" class="navbar-item button is-primary">Login</a>
-            </div>
-        </div>
-    </nav>
+    <div id="topbar-container"></div>
 
     <section class="section">
         <div class="container">
@@ -33,24 +24,8 @@
                     <div class="column is-narrow"><div style="width: 30px;"></div></div>
                 </div>
 
-                <div class="columns is-vcentered is-mobile index-row">
-                    <div class="column is-4"><p class="title is-5">NVDA</p></div>
-                    <div class="column has-text-centered"><div class="status-box is-trained"></div></div>
-                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
-                    <div class="column has-text-centered">
-                        <a id="nvdaLink" class="status-box is-trained"></a>
-                    </div>
-                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
-                    <div class="column is-narrow"><button class="button is-white">🗑️</button></div>
-                </div>
-
-                <div class="columns is-vcentered is-mobile index-row">
-                    <div class="column is-4"><p class="title is-5">AAPL</p></div>
-                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
-                    <div class="column has-text-centered"><div class="status-box is-trained"></div></div>
-                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
-                    <div class="column has-text-centered"><div class="status-box is-untrained"></div></div>
-                    <div class="column is-narrow"><button class="button is-white">🗑️</button></div>
+                <div id="index-container">
+                    <!-- Dynamically generated index rows will be inserted here -->
                 </div>
 
                 <div class="mt-5"><input class="input" type="text" placeholder="Track new index...."></div>
@@ -58,12 +33,26 @@
         </div>
     </section>
 
+    <script src="dashboard.js"></script>
     <script>
-        const params = new URLSearchParams(window.location.search);
-        const session = params.get('session') || 'GUEST';
-        document.getElementById('userDisplay').innerText = `Session: ${session}`;
-        // Set dynamic link for NVDA
-        document.getElementById('nvdaLink').href = `chart.html?session=${session}&index=NVDA&time=1D`;
+        async function insertTopbar() {
+            try {
+                const resp = await fetch('template.html');
+                if (!resp.ok) throw new Error('Failed to load topbar template');
+                const html = await resp.text();
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const template = doc.querySelector('#topbar-template');
+                if (!template) throw new Error('Topbar template not found');
+
+                const topbarContent = template.content.cloneNode(true);
+                document.getElementById('topbar-container').appendChild(topbarContent);
+            } catch (error) {
+                console.warn(error);
+            }
+        }
+
+        insertTopbar();
     </script>
 </body>
 </html>

@@ -7,7 +7,12 @@
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body class="has-background-light">
-    <div id="topbar-container"></div>
+    <nav class="navbar is-dark">
+        <div class="container">
+            <div class="navbar-brand"><span class="navbar-item">QuantOracle</span></div>
+            <div class="navbar-end"><a class="navbar-item" href="index.html">Logout</a></div>
+        </div>
+    </nav>
 
     <section class="section">
         <div class="container">
@@ -16,6 +21,10 @@
                     <div>
                         <h2 class="title is-4 mb-0" id="indexTitle">Loading...</h2>
                         <span class="tag is-info is-light" id="timeTitle">Timeframe</span>
+                    </div>
+                    <div class="has-text-right">
+                        <p class="is-size-7 has-text-grey">Session ID</p>
+                        <p class="has-text-weight-bold" id="sessionTitle">---</p>
                     </div>
                 </div>
                 
@@ -32,6 +41,7 @@
         const params = new URLSearchParams(window.location.search);
         document.getElementById('indexTitle').innerText = params.get('index') || 'No Index';
         document.getElementById('timeTitle').innerText = `Timeframe: ${params.get('time') || 'N/A'}`;
+        document.getElementById('sessionTitle').innerText = params.get('session') || 'N/A';
 
         const json_test_data = [
             { time: '2025-12-01', open: 118.42, high: 121.30, low: 117.10, close: 120.15 },
@@ -161,33 +171,6 @@
         series.setData(json_test_predicted_data);
         
         chart.timeScale().fitContent();
-
-        async function insertTopbar() {
-            try {
-                const resp = await fetch('template.html');
-                if (!resp.ok) throw new Error('Failed to load topbar template');
-                const html = await resp.text();
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-                const template = doc.querySelector('#topbar-template');
-                if (!template) throw new Error('Topbar template not found');
-
-                const topbarContent = template.content.cloneNode(true);
-                document.getElementById('topbar-container').appendChild(topbarContent);
-            } catch (error) {
-                console.warn(error);
-                document.getElementById('topbar-container').innerHTML = `
-                    <nav class="navbar is-dark">
-                        <div class="container">
-                            <div class="navbar-brand"><span class="navbar-item">QuantOracle</span></div>
-                            <div class="navbar-end"><a class="navbar-item" href="index.html">Logout</a></div>
-                        </div>
-                    </nav>
-                `;
-            }
-        }
-
-        insertTopbar();
     </script>
 </body>
 </html>

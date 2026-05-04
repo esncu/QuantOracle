@@ -73,6 +73,12 @@
                         <h1 class="title has-text-centered">Admin Login</h1>
                         <form id="adminLoginForm">
                             <div class="field">
+                                <label class="label">Admin Username</label>
+                                <div class="control">
+                                    <input id="adminLoginUsername" class="input" type="text" placeholder="Admin Username" required>
+                                </div>
+                            </div>
+                            <div class="field">
                                 <label class="label">Admin Password</label>
                                 <div class="control">
                                     <input id="adminLoginPassword" class="input" type="password" placeholder="Admin Password" required>
@@ -139,9 +145,10 @@
 
         document.getElementById('adminLoginForm').addEventListener('submit', function(event) {
             event.preventDefault();
+            const username = document.getElementById('adminLoginUsername').value.trim();
             const password = document.getElementById('adminLoginPassword').value.trim();
-            if (!password) {
-                setMessage('Please enter admin password.', 'is-warning');
+            if (!username || !password) {
+                setMessage('Please enter both admin username and password.', 'is-warning');
                 return;
             }
             setMessage('Logged in as admin. Redirecting...', 'is-success');
