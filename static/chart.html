@@ -13,12 +13,15 @@
         <div class="container">
             <div class="box p-0 overflow-hidden">
                 <div class="p-4 is-flex is-justify-content-between has-background-white">
-                    <div>
-                        <h2 class="title is-4 mb-0" id="indexTitle">Loading...</h2>
+                    <div style="width: 100%;">
+                        <div style="display: grid; grid-template-columns: auto auto; justify-content: space-between; width: 100%;">
+                          <h2 class="title is-4 mb-0" id="indexTitle">Loading...</h2>
+                          <input type="button" class="title is-4 mb-0 guideBtn" style="background-color: grey; padding: 2px; border: 0; border-radius: 2px;" value="quick guide"></input>
+                        </div>
                         <span class="tag is-info is-light" id="timeTitle">Timeframe</span>
                     </div>
                 </div>
-                
+
                 <div id="chart" style="height: 450px; width: 100%;"></div>
 
                 <div class="p-4 has-background-white-bis">
@@ -27,6 +30,10 @@
             </div>
         </div>
     </section>
+    <div id="guidePopup" style="position: fixed; z-index: 9999; width: 100%; height: 100%; display: none; grid-template-rows: 5% auto; top:0; justify-content:center;">
+      <input type="button" value="X" style="background-color: red; padding: 2px; border: 0; border-radius: 2px; height: 100%; width: 100%;" class="guideBtn">
+      <img src="./images/guide.png" alt="">
+    </div>
 
     <script>
       const params = new URLSearchParams(window.location.search);
@@ -99,6 +106,20 @@
           const res = await fetch(`http://localhost:8000/chart/?session=${params.get('session')}&action=GET&index=foo`);
           return await res.json();
       }
+
+      const guideBtns = document.querySelectorAll('.guideBtn');
+      var guide = false;
+      guideBtns.forEach(btn =>{
+        btn.addEventListener('click', (e)=>{
+          if(guide)
+            document.getElementById("guidePopup").style.display = "grid";
+          else
+            document.getElementById("guidePopup").style.display = "none";
+          guide = !guide;
+          console.log('a');
+        });
+      });
+
     </script>
   </body>
 </html>
