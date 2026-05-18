@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 import psycopg2
 import requests
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pydantic import BaseModel 
 from passlib.hash import bcrypt
 
 app = FastAPI()
@@ -18,6 +19,9 @@ def get_conn():
         password="user123",
     )
 
+class UserAuth(BaseModel):
+    username: str
+    password: str
 
 def register(name, password):
     conn = get_conn()
@@ -48,7 +52,7 @@ def login(name, password):
         return None
 
     session_id = str(uuid.uuid4())
-    session_expiry = datetime.utcnow() + timedelta(hours=1)
+    session_expiry = datetime.now(timezone.utc)
     cur.execute(
         "INSERT INTO session (id, user_id, expires_at) VALUES (%s, %s, %s)",
         (session_id, user_id, session_expiry),
@@ -63,11 +67,10 @@ def get_api_key():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT api_key FROM settings LIMIT 1")
-    api_key = cur.fetchone()[0]
-
+    row = cur.fetchone()
     cur.close()
     conn.close()
-    return api_key
+    return row[0] if row else ""
 
 
 def get_stock_price(symbol):
@@ -75,13 +78,24 @@ def get_stock_price(symbol):
 
     url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=full&apikey={api_key}"
     r = requests.get(url)
-    data = r.json()
+    return r.json()
 
-    print(data)
+
+@app.post("/register")
+def api_register(auth: UserAuth):
+    register(auth.username, auth.password)
+    return {"status": "success", "message": "User successfully registered"}
+
+@app.post("/login")
+def api_login(auth: UserAuth):
+    session_id = login(auth.username, auth.password)
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return {"status": "success", "session_id": session_id}
 
 
 @app.get("/dashboard/")
-def read_item(
+def read_dashboard(
     session: str, action: str, index: str | None = None, time: str | None = None
 ):
     if action == "GET":
@@ -92,10 +106,11 @@ def read_item(
                 {"idx_name": "AAPL", "5M": False, "1H": True, "1D": False, "1W": False},
             ],
         }
+    return {"status": "error", "message": "Invalid dashboard read action"}
 
 
 @app.get("/chart/")
-def read_item(
+def read_chart(
     session: str, action: str, index: str | None = None, time: str | None = None
 ):
     if action == "GET":
@@ -789,6 +804,55 @@ def read_item(
                 },
             ],
         }
+    return{"status": "error", "message": "Invalid chart read action"}
 
+@app.post("/dashboard/")
+def modify_dashboard(
+    session: str, action: str, index: str | None = None, time: str | None = None 
+):
+    if action =="GENERATE":
+        return{
+            "status": "success",
+            "message": f"New model generated for index {index}",
+        }
+    elif action =="TMPDELETE":
+        return{
+            "status": "success",
+            "message": f"Index {index} is deleted",
+        }
+    elif action =="DELETE":
+        return{
+            "status": "success",
+            "message": f"Index {index} is permanently deleted",
+        }
+    elif action =="RESTORE":
+        return{
+            "status": "success",
+            "message": f"Index {index} has been restored",
+        }
+    return {"status": "error", "message": "Invalid dashboard action"}
+
+@app.post("/chart/")
+def modify_chart(
+    session: str, action: str, index: str | None = None, time: str | None = None 
+):
+    if action == "REGEN":
+        try:
+            api_key = get_api_key()
+        except Exception:
+            pass
+        return{
+            "status": "success",
+            "message": f"New model for {index} has been retrained",
+            "data": [
+                {
+                "time": "2026-04-24",
+                "open": 213.80,
+                "close": 215.50,
+                "type": "forecast",  
+                }
+            ],
+        }
+    return{"status": "error","message": "Invalid chart action"}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
