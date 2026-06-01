@@ -6,24 +6,39 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        .user-card { border-left: 4px solid #3273dc; margin-bottom: 1.5rem; }
-        .dash-card { border-left: 3px solid #48c78e; margin: 10px 0 10px 20px; padding-left: 15px; }
-        .data-row { margin: 5px 0 5px 30px; padding: 8px 12px; background: #fff; border: 1px solid #eee; border-radius: 4px; }
-        .deleted-row { background: #fff3cd; border-left: 3px solid #ff6b6b; color: #777; }
-        .badge { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; margin-left: 8px; }
+        .user-card  { border-left: 4px solid #3273dc; margin-bottom: 1.5rem; }
+        .data-row   { margin: 5px 0 5px 20px; padding: 8px 12px; background: #fff; border: 1px solid #eee; border-radius: 4px; }
+        .flagged-row { background: #fff3cd; border-left: 3px solid #ff6b6b; }
+        .badge      { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; margin-left: 8px; }
     </style>
 </head>
 <body class="has-background-light p-5">
-    <div id="topbar-container"></div> <div class="container" style="max-width: 900px;">
+    <nav class="navbar is-dark mb-5">
+        <div class="container">
+            <div class="navbar-brand"><span class="navbar-item has-text-white has-text-weight-bold">QuantOracle Admin</span></div>
+            <div class="navbar-end"><a class="navbar-item has-text-white" href="login.html">Logout</a></div>
+        </div>
+    </nav>
+
+    <div class="container" style="max-width: 900px;">
         <h1 class="title mb-5">Admin Space</h1>
 
         <div class="field has-addons mb-5">
             <div class="control is-expanded">
-                <input class="input" type="text" id="searchInput" placeholder="Search by username..." onkeyup="if(event.key === 'Enter') render()">
+                <input class="input" type="text" id="searchInput" placeholder="Search by username..."
+                    onkeyup="if(event.key==='Enter') render()">
             </div>
             <div class="control">
                 <button class="button is-info" onclick="render()">Search</button>
             </div>
+        </div>
+
+        <!-- Filter toggle -->
+        <div class="field mb-4">
+            <label class="checkbox">
+                <input type="checkbox" id="showFlaggedOnly" onchange="render()">
+                Show flagged-for-deletion only
+            </label>
         </div>
 
         <div id="app"><p class="has-text-grey">Loading users...</p></div>
@@ -31,83 +46,118 @@
 
     <script>
         let allUsers = [];
-        const session = new URLSearchParams(window.location.search).get('session') || 'GUEST-MODE';
+        const session = new URLSearchParams(window.location.search).get('session') || '';
 
-        
+        // ----------------------------------------------------------------
+        // Load
+        // ----------------------------------------------------------------
         async function loadData() {
             try {
-                const res = await fetch(`/api/admin/users?session=${session}`);
-                if (!res.ok) throw new Error('Network response was not ok');
+                const res = await fetch(`/admin/users?session=${session}`);
+                if (res.status === 401 || res.status === 403) {
+                    document.getElementById('app').innerHTML =
+                        '<p class="has-text-danger">Access denied. Admin session required.</p>';
+                    return;
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 allUsers = await res.json();
                 render();
             } catch (err) {
-                document.getElementById('app').innerHTML = `<p class="has-text-danger">Error loading data: ${err.message}</p>`;
+                document.getElementById('app').innerHTML =
+                    `<p class="has-text-danger">Error loading data: ${err.message}</p>`;
             }
         }
 
-        
+        // ----------------------------------------------------------------
+        // Render
+        // ----------------------------------------------------------------
         function render() {
-            const query = document.getElementById('searchInput').value.toLowerCase();
-            
-            
-            const filteredUsers = allUsers
-                .filter(u => u.name.toLowerCase().includes(query))
-                .sort((a, b) => a.id - b.id);
+            const query       = document.getElementById('searchInput').value.toLowerCase();
+            const flaggedOnly = document.getElementById('showFlaggedOnly').checked;
 
-            if (!filteredUsers.length) {
-                document.getElementById('app').innerHTML = '<p class="has-text-centered has-text-grey my-6">No users found.</p>';
+            let users = allUsers.filter(u => u.name.toLowerCase().includes(query));
+
+            if (!users.length) {
+                document.getElementById('app').innerHTML =
+                    '<p class="has-text-centered has-text-grey my-6">No users found.</p>';
                 return;
             }
 
-            document.getElementById('app').innerHTML = filteredUsers.map(user => `
+            document.getElementById('app').innerHTML = users.map(user => {
+                let dataRows = user.data || [];
+                if (flaggedOnly) dataRows = dataRows.filter(d => d.deleted);
+
+                // Skip user card entirely if flaggedOnly and they have nothing flagged
+                if (flaggedOnly && dataRows.length === 0) return '';
+
+                const flaggedCount = (user.data || []).filter(d => d.deleted).length;
+
+                return `
                 <div class="box user-card p-4">
                     <div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
-                        <h2 class="subtitle is-5 mb-0"><strong>User #${user.id}:</strong> ${user.name} <span class="badge">${user.dashboards?.length || 0} dashboards</span></h2>
-                        <button class="button is-danger is-small" onclick="apiAction('users/${user.id}', 'DELETE', 'user')"><i class="fas fa-trash mr-2"></i> Delete User</button>
+                        <h2 class="subtitle is-5 mb-0">
+                            <strong>User #${user.id}:</strong> ${user.name}
+                            <span class="badge">${(user.data || []).length} entries</span>
+                            ${flaggedCount > 0 ? `<span class="badge" style="background:#fff3cd;color:#c0392b">${flaggedCount} flagged</span>` : ''}
+                        </h2>
+                        <button class="button is-danger is-small"
+                            onclick="deleteUser(${user.id}, '${user.name}')">
+                            <i class="fas fa-trash mr-2"></i> Delete User
+                        </button>
                     </div>
 
-                    ${(user.dashboards || []).sort((a, b) => a.id - b.id).map(dash => `
-                        <div class="dash-card">
-                            <div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
+                    ${dataRows.length === 0
+                        ? '<p class="has-text-grey is-size-7 ml-4">No data entries.</p>'
+                        : dataRows.map(d => `
+                            <div class="data-row is-flex is-justify-content-space-between is-align-items-center ${d.deleted ? 'flagged-row' : ''}">
                                 <div>
-                                    <strong>Dashboard #${dash.id}:</strong> ${dash.name}
-                                    <span class="badge">${dash.data?.length || 0} entries</span>
+                                    <strong>Data #${d.id}:</strong> ${d.symbol_name} — ${d.timeframe}
+                                    ${d.deleted ? '<span class="has-text-danger is-size-7 ml-2"><i class="fas fa-flag"></i> Flagged for deletion</span>' : ''}
                                 </div>
-                                <button class="button is-danger is-small is-light" onclick="apiAction('dashboards/${dash.id}', 'DELETE', 'dashboard')"><i class="fas fa-trash"></i></button>
-                            </div>
-
-                            ${(dash.data || []).sort((a, b) => a.id - b.id).map(d => `
-                                <div class="data-row is-flex is-justify-content-space-between is-align-items-center ${d.deleted ? 'deleted-row' : ''}">
-                                    <div>
-                                        <strong>Data #${d.id}:</strong> ${d.symbol_name} - ${d.timeframe} 
-                                        ${d.deleted ? '<span class="has-text-danger is-size-7 ml-2">(Deleted)</span>' : ''}
-                                    </div>
-                                    ${d.deleted 
-                                        ? `<button class="button is-success is-small" onclick="apiAction('data/${d.id}/restore', 'POST', 'restore data')"><i class="fas fa-undo mr-1"></i> Restore</button>`
-                                        : `<button class="button is-danger is-small is-outlined" onclick="apiAction('data/${d.id}', 'DELETE', 'data')"><i class="fas fa-trash"></i></button>`
+                                <div class="buttons mb-0">
+                                    ${d.deleted
+                                        ? `<button class="button is-success is-small" onclick="restoreData(${d.id})">
+                                               <i class="fas fa-undo mr-1"></i> Restore
+                                           </button>
+                                           <button class="button is-danger is-small" onclick="deleteData(${d.id}, '${d.symbol_name}', '${d.timeframe}')">
+                                               <i class="fas fa-trash mr-1"></i> Delete
+                                           </button>`
+                                        : `<button class="button is-danger is-small is-outlined" onclick="deleteData(${d.id}, '${d.symbol_name}', '${d.timeframe}')">
+                                               <i class="fas fa-trash"></i>
+                                           </button>`
                                     }
                                 </div>
-                            `).join('') || '<p class="has-text-grey is-size-7 ml-5">No data</p>'}
-                        </div>
-                    `).join('') || '<p class="has-text-grey is-size-7 ml-4">No dashboards</p>'}
-                </div>
-            `).join('');
+                            </div>
+                        `).join('')
+                    }
+                </div>`;
+            }).join('');
         }
 
-        
-        async function apiAction(endpoint, method, actionName) {
-            if (!confirm(`Are you sure you want to ${actionName}?`)) return;
-
-            try {
-                const res = await fetch(`/api/admin/${endpoint}?session=${session}`, { method });
-                if (!res.ok) throw new Error(`Failed to ${actionName}`);
-                loadData(); 
-            } catch (err) {
-                alert(`Error: ${err.message}`);
-            }
+        // ----------------------------------------------------------------
+        // Actions
+        // ----------------------------------------------------------------
+        async function deleteUser(userId, name) {
+            if (!confirm(`Permanently delete user "${name}" and ALL their data?`)) return;
+            const res = await fetch(`/admin/users/${userId}?session=${session}`, { method: 'DELETE' });
+            if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
+            loadData();
         }
 
-        // Init
+        async function deleteData(dataId, sym, tf) {
+            if (!confirm(`Permanently delete data for ${sym} [${tf}]?`)) return;
+            const res = await fetch(`/admin/data/${dataId}?session=${session}`, { method: 'DELETE' });
+            if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
+            loadData();
+        }
+
+        async function restoreData(dataId) {
+            if (!confirm(`Restore this entry (un-flag for deletion)?`)) return;
+            const res = await fetch(`/admin/data/${dataId}/restore?session=${session}`, { method: 'POST' });
+            if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
+            loadData();
+        }
+
         loadData();
     </script>
 </body>

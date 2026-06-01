@@ -15,8 +15,8 @@
                 <div class="p-4 is-flex is-justify-content-between has-background-white">
                     <div style="width: 100%;">
                         <div style="display: grid; grid-template-columns: auto auto; justify-content: space-between; width: 100%;">
-                          <h2 class="title is-4 mb-0" id="indexTitle">Loading...</h2>
-                          <input type="button" class="title is-4 mb-0 guideBtn" style="background-color: grey; padding: 2px; border: 0; border-radius: 2px;" value="quick guide"></input>
+                            <h2 class="title is-4 mb-0" id="indexTitle">Loading...</h2>
+                            <button class="button is-light guideBtn">quick guide</button>
                         </div>
                         <span class="tag is-info is-light" id="timeTitle">Timeframe</span>
                     </div>
@@ -30,96 +30,117 @@
             </div>
         </div>
     </section>
-    <div id="guidePopup" style="position: fixed; z-index: 9999; width: 100%; height: 100%; display: none; grid-template-rows: 5% auto; top:0; justify-content:center;">
-      <input type="button" value="X" style="background-color: red; padding: 2px; border: 0; border-radius: 2px; height: 100%; width: 100%;" class="guideBtn">
-      <img src="./images/guide.png" alt="">
+
+    <div id="guidePopup" style="position: fixed; z-index: 9999; width: 100%; height: 100%; display: none; grid-template-rows: 5% auto; top: 0; justify-content: center;">
+        <button style="background-color: red; border: 0; color: white; font-weight: bold; cursor: pointer;" class="guideBtn">✕ Close</button>
+        <img src="./images/guide.png" alt="Quick guide">
     </div>
 
     <script>
-      const params = new URLSearchParams(window.location.search);
-      document.getElementById('indexTitle').innerText = params.get('index') || 'No Index';
-      document.getElementById('timeTitle').innerText = `Timeframe: ${params.get('time') || 'N/A'}`;
+        const params = new URLSearchParams(window.location.search);
+        const session = params.get('session');
+        const index   = params.get('index') || '';
+        const time    = params.get('time')  || '';
 
-      var json_test_data; 
-      async function loadChart(){
-        json_test_data = await loadData();
-        console.log(json_test_data);
-        const json_test_predicted_data = json_test_data.data.map(item => {
-            if (item.time > '2026-03-31') {
-                const isUp = item.close >= item.open;
-                const predictedColor = isUp ? '#FFD700' : '#BF00FF'; // Gold for Up, Neon Purple for Down
+        document.getElementById('indexTitle').innerText = index || 'No Index';
+        document.getElementById('timeTitle').innerText  = `Timeframe: ${time || 'N/A'}`;
 
-                return {
-                    ...item,
-                    color: predictedColor,
-                    wickColor: predictedColor,
-                    borderColor: predictedColor,
-                };
+        // ----------------------------------------------------------------
+        // Chart
+        // ----------------------------------------------------------------
+        async function loadChart() {
+            let payload;
+            try {
+                // FIX: relative URL, correct index+time from params
+                const res = await fetch(
+                    `/api/chart/?session=${session}&action=GET&index=${encodeURIComponent(index)}&time=${encodeURIComponent(time)}`,
+                    { method: 'POST' }
+                );
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                payload = await res.json();
+            } catch (err) {
+                document.getElementById('chart').innerHTML =
+                    `<p class="has-text-danger p-4">Failed to load chart: ${err.message}</p>`;
+                return;
             }
-            return item;
+
+            // FIX: API returns candle_close_timestamp (UNIX seconds).
+            // LightweightCharts v4+ candlestick series needs { time, open, high, low, close }
+            // where `time` is a UNIX timestamp (number) or "YYYY-MM-DD" string.
+            const candles = payload.data.map(d => ({
+                time:  parseInt(d.candle_close_timestamp, 10),
+                open:  parseFloat(d.open),
+                high:  parseFloat(d.high),
+                low:   parseFloat(d.low),
+                close: parseFloat(d.close),
+                // colour forecast candles gold (up) / purple (down)
+                ...(d.fake === "true" ? {
+                    color:       d.close >= d.open ? '#FFD700' : '#BF00FF',
+                    wickColor:   d.close >= d.open ? '#FFD700' : '#BF00FF',
+                    borderColor: d.close >= d.open ? '#FFD700' : '#BF00FF',
+                } : {}),
+            }));
+
+            // Sort ascending (required by LightweightCharts)
+            candles.sort((a, b) => a.time - b.time);
+
+            const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+                layout: { background: { color: '#ffffff' }, textColor: '#333' },
+                grid:   { vertLines: { visible: false }, horzLines: { color: '#f0f0f0' } },
+                width:  document.getElementById('chart').clientWidth,
+                height: 450,
+            });
+
+            const series = chart.addSeries(LightweightCharts.CandlestickSeries, {
+                upColor:   '#48c78e',
+                downColor: '#f14668',
+                borderUpColor:   '#48c78e',
+                borderDownColor: '#f14668',
+                wickUpColor:     '#48c78e',
+                wickDownColor:   '#f14668',
+            });
+
+            // FIX: was called twice (second call overwrote the first uselessly)
+            series.setData(candles);
+            chart.timeScale().fitContent();
+        }
+
+        loadChart();
+
+        // ----------------------------------------------------------------
+        // Topbar
+        // ----------------------------------------------------------------
+        async function insertTopbar() {
+            try {
+                const resp = await fetch('template.html');
+                if (!resp.ok) throw new Error('no template');
+                const html = await resp.text();
+                const doc  = new DOMParser().parseFromString(html, 'text/html');
+                const tmpl = doc.querySelector('#topbar-template');
+                if (!tmpl) throw new Error('template tag missing');
+                document.getElementById('topbar-container').appendChild(tmpl.content.cloneNode(true));
+            } catch {
+                document.getElementById('topbar-container').innerHTML = `
+                    <nav class="navbar is-dark">
+                        <div class="container">
+                            <div class="navbar-brand"><span class="navbar-item">QuantOracle</span></div>
+                            <div class="navbar-end"><a class="navbar-item" href="login.html">Logout</a></div>
+                        </div>
+                    </nav>`;
+            }
+        }
+        insertTopbar();
+
+        // ----------------------------------------------------------------
+        // Guide popup  — FIX: inverted toggle logic
+        // ----------------------------------------------------------------
+        let guideOpen = false;
+        document.querySelectorAll('.guideBtn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                guideOpen = !guideOpen;
+                document.getElementById('guidePopup').style.display = guideOpen ? 'grid' : 'none';
+            });
         });
-
-        const chart = LightweightCharts.createChart(document.getElementById('chart'), {
-            layout: { background: { color: '#ffffff' }, textColor: '#333' },
-            grid: { vertLines: { visible: false }, horzLines: { color: '#f0f0f0' } },
-        });
-
-        // const series = chart.addCandlestickSeries({ upColor: '#48c78e', downColor: '#f14668' });
-        const series = chart.addSeries(LightweightCharts.CandlestickSeries, { upColor: '#48c78e', downColor: '#f14668' });
-
-        // load data into chart
-        series.setData(json_test_data.data);
-        series.setData(json_test_predicted_data);
-        
-        chart.timeScale().fitContent();
-      }
-      loadChart();
-
-      async function insertTopbar() {
-          try {
-              const resp = await fetch('template.html');
-              if (!resp.ok) throw new Error('Failed to load topbar template');
-              const html = await resp.text();
-              const parser = new DOMParser();
-              const doc = parser.parseFromString(html, 'text/html');
-              const template = doc.querySelector('#topbar-template');
-              if (!template) throw new Error('Topbar template not found');
-
-              const topbarContent = template.content.cloneNode(true);
-              document.getElementById('topbar-container').appendChild(topbarContent);
-          } catch (error) {
-              console.warn(error);
-              document.getElementById('topbar-container').innerHTML = `
-                  <nav class="navbar is-dark">
-                      <div class="container">
-                          <div class="navbar-brand"><span class="navbar-item">QuantOracle</span></div>
-                          <div class="navbar-end"><a class="navbar-item" href="index.html">Logout</a></div>
-                      </div>
-                  </nav>
-              `;
-          }
-      }
-
-      insertTopbar();
-
-      async function loadData(){
-          const res = await fetch(`http://localhost:8000/chart/?session=${params.get('session')}&action=GET&index=foo`);
-          return await res.json();
-      }
-
-      const guideBtns = document.querySelectorAll('.guideBtn');
-      var guide = false;
-      guideBtns.forEach(btn =>{
-        btn.addEventListener('click', (e)=>{
-          if(guide)
-            document.getElementById("guidePopup").style.display = "grid";
-          else
-            document.getElementById("guidePopup").style.display = "none";
-          guide = !guide;
-          console.log('a');
-        });
-      });
-
     </script>
-  </body>
+</body>
 </html>

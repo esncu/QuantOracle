@@ -1,92 +1,203 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+
+import bcrypt
 import psycopg2
 import requests
 import uuid
-from datetime import datetime, timedelta, timezone
-from pydantic import BaseModel 
-from passlib.hash import bcrypt
+
+from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 app = FastAPI()
 
+# All API routes live under /api so the StaticFiles mount at "/" never
+# intercepts them (StaticFiles returns an HTML 404 for unknown paths,
+# which breaks res.json() in the frontend).
+api = APIRouter(prefix="/api")
 
+SESSION_TTL_HOURS = 24
+
+# ---------------------------------------------------------------------------
+# DB
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
 def get_conn():
-    return psycopg2.connect(
+    conn = psycopg2.connect(
         host="localhost",
-        port=5431,
+        port=5432,  # matches docker -p 5432:5432
         database="stocks",
-        user="backend_user",
-        password="user123",
+        user="postgres",
+        password="qu0cle",
     )
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+
+def _safe_bcrypt_hash(password: str) -> str:
+    # Truncate to 72 bytes — bcrypt's hard limit.
+    pw = password.encode()[:72]
+    return bcrypt.hashpw(pw, bcrypt.gensalt()).decode()
+
+
+def _safe_bcrypt_verify(password: str, hashed: str) -> bool:
+    pw = password.encode()[:72]
+    return bcrypt.checkpw(pw, hashed.encode())
+
+
+def register(name: str, password: str) -> None:
+    hashed_password = _safe_bcrypt_hash(password)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (name, pass_hash) VALUES (%s, %s)",
+                (name, hashed_password),
+            )
+        conn.commit()
+
+
+def login(name: str, password: str) -> str | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, pass_hash FROM users WHERE name = %s", (name,))
+            result = cur.fetchone()
+            if not result or not _safe_bcrypt_verify(password, result[1]):
+                return None
+
+            user_id = result[0]
+            session_id = str(uuid.uuid4())
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
+            cur.execute(
+                "INSERT INTO session (id, user_id, expires_at) VALUES (%s, %s, %s)",
+                (session_id, user_id, expires_at),
+            )
+        conn.commit()
+    return session_id
+
+
+def admin_login(name: str, password: str) -> str | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Query the standalone admin table
+            cur.execute("SELECT id, pass_hash FROM admin WHERE name = %s", (name,))
+            result = cur.fetchone()
+            # Plain-text password verification per init.sql seeding configuration
+            if not result or result[1] != password:
+                return None
+
+            admin_id = result[0]
+            session_id = str(uuid.uuid4())
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
+
+            # Reusing the session table by mapping admin_id into the session context.
+            # Note: Ensure foreign key constraints in your schema match this usage pattern.
+            cur.execute(
+                "INSERT INTO session (id, user_id, expires_at) VALUES (%s, %s, %s)",
+                (session_id, admin_id, expires_at),
+            )
+        conn.commit()
+    return session_id
+
+
+def validate_session(session_id: str) -> int:
+    """Return user_id for a valid non-expired session, or raise 401."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id FROM session WHERE id = %s AND expires_at > %s",
+                (session_id, datetime.now(timezone.utc)),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return row[0]
+
+
+def validate_admin_session(session_id: str) -> int:
+    """Verifies that the session belongs to a valid account inside the admin table."""
+    admin_id = validate_session(session_id)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Check the standalone admin table to verify identity
+            cur.execute("SELECT id FROM admin WHERE id = %s", (admin_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return admin_id
+
+
+# ---------------------------------------------------------------------------
+# API-key / upstream data helpers
+# ---------------------------------------------------------------------------
+
+
+def get_api_key() -> str:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT api_key FROM settings LIMIT 1")
+            row = cur.fetchone()
+    return row[0] if row else ""
+
+
+def fetch_stock_data(symbol: str) -> dict:
+    api_key = get_api_key()
+    url = (
+        "https://www.alphavantage.co/query"
+        f"?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=full&apikey={api_key}"
+    )
+    return requests.get(url).json()
+
+
+def rows_to_candles(rows) -> list[dict]:
+    """Convert DB candle rows (ts, open, high, low, close, fake) to API format."""
+    return [
+        {
+            "candle_close_timestamp": str(r[0]),
+            "open": str(r[1]),
+            "high": str(r[2]),
+            "low": str(r[3]),
+            "close": str(r[4]),
+            "fake": "true" if r[5] else "false",
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
 
 class UserAuth(BaseModel):
     username: str
     password: str
 
-def register(name, password):
-    conn = get_conn()
-    cur = conn.cursor()
-    hashed_password = bcrypt.hash(password)
-    cur.execute(
-        "INSERT INTO users (name, pass_hash) VALUES (%s, %s)", (name, hashed_password)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+
+# ---------------------------------------------------------------------------
+# Auth endpoints
+# ---------------------------------------------------------------------------
 
 
-def login(name, password):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT id, pass_hash FROM users WHERE name = %s", (name,))
-    result = cur.fetchone()
-    if not result:
-        cur.close()
-        conn.close()
-        return None
-
-    user_id, hashed_password = result
-    if not bcrypt.verify(password, hashed_password):
-        cur.close()
-        conn.close()
-        return None
-
-    session_id = str(uuid.uuid4())
-    session_expiry = datetime.now(timezone.utc)
-    cur.execute(
-        "INSERT INTO session (id, user_id, expires_at) VALUES (%s, %s, %s)",
-        (session_id, user_id, session_expiry),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    return session_id
-
-
-def get_api_key():
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT api_key FROM settings LIMIT 1")
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row[0] if row else ""
-
-
-def get_stock_price(symbol):
-    api_key = get_api_key()
-
-    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=full&apikey={api_key}"
-    r = requests.get(url)
-    return r.json()
-
-
-@app.post("/register")
+@api.post("/register")
 def api_register(auth: UserAuth):
-    register(auth.username, auth.password)
+    try:
+        register(auth.username, auth.password)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"status": "success", "message": "User successfully registered"}
 
-@app.post("/login")
+
+@api.post("/login")
 def api_login(auth: UserAuth):
     session_id = login(auth.username, auth.password)
     if not session_id:
@@ -94,765 +205,395 @@ def api_login(auth: UserAuth):
     return {"status": "success", "session_id": session_id}
 
 
-@app.get("/dashboard/")
-def read_dashboard(
-    session: str, action: str, index: str | None = None, time: str | None = None
+@api.post("/admin/login")
+def api_admin_login(auth: UserAuth):
+    session_id = admin_login(auth.username, auth.password)
+    if not session_id:
+        raise HTTPException(
+            status_code=401, detail="Invalid admin username or password"
+        )
+    return {"status": "success", "session_id": session_id}
+
+
+# ---------------------------------------------------------------------------
+# Dashboard  —  POST /dashboard?session=…&action=…&index=…&time=…
+#
+#   GET       – all dashboard entries for this user (non-deleted)
+#   GENERATE  – add a new entry (index+time) to user's dashboard + data table
+#   TMPDELETE – user flags (index+time) for deletion  →  is_deleted=TRUE
+#   RESTORE   – admin un-flags (index+time)           →  is_deleted=FALSE
+#   DELETE    – admin hard-deletes the data row (cascade removes candles too)
+# ---------------------------------------------------------------------------
+
+
+@api.post("/dashboard/")
+def dashboard(
+    session: str,
+    action: str,
+    index: str | None = None,
+    time: str | None = None,
 ):
+    user_id = validate_session(session)
+
     if action == "GET":
-        return {
-            "username": "sith",
-            "data": [
-                {"idx_name": "NVDA", "5M": True, "1H": False, "1D": True, "1W": False},
-                {"idx_name": "AAPL", "5M": False, "1H": True, "1D": False, "1W": False},
-            ],
-        }
-    return {"status": "error", "message": "Invalid dashboard read action"}
+        # Return all non-deleted dashboard entries for this user,
+        # shaped as { data: [ { idx_name, 5M, 1H, 1D, 1W }, ... ] }
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT symbol_name, timeframe
+                    FROM dashboard
+                    WHERE user_id = %s AND is_deleted = FALSE
+                    ORDER BY symbol_name, timeframe
+                    """,
+                    (user_id,),
+                )
+                rows = cur.fetchall()
 
-
-@app.get("/chart/")
-def read_chart(
-    session: str, action: str, index: str | None = None, time: str | None = None
-):
-    if action == "GET":
-        return {
-            "data": [
-                {
-                    "time": "2025-12-01",
-                    "open": 118.42,
-                    "high": 121.30,
-                    "low": 117.10,
-                    "close": 120.15,
-                },
-                {
-                    "time": "2025-12-02",
-                    "open": 120.15,
-                    "high": 123.80,
-                    "low": 119.40,
-                    "close": 122.90,
-                },
-                {
-                    "time": "2025-12-03",
-                    "open": 122.90,
-                    "high": 124.50,
-                    "low": 120.60,
-                    "close": 121.35,
-                },
-                {
-                    "time": "2025-12-04",
-                    "open": 121.35,
-                    "high": 122.70,
-                    "low": 118.20,
-                    "close": 119.80,
-                },
-                {
-                    "time": "2025-12-05",
-                    "open": 119.80,
-                    "high": 121.00,
-                    "low": 117.50,
-                    "close": 120.45,
-                },
-                {
-                    "time": "2025-12-08",
-                    "open": 120.45,
-                    "high": 125.60,
-                    "low": 119.90,
-                    "close": 124.30,
-                },
-                {
-                    "time": "2025-12-09",
-                    "open": 124.30,
-                    "high": 127.10,
-                    "low": 123.50,
-                    "close": 126.75,
-                },
-                {
-                    "time": "2025-12-10",
-                    "open": 126.75,
-                    "high": 129.00,
-                    "low": 125.80,
-                    "close": 128.20,
-                },
-                {
-                    "time": "2025-12-11",
-                    "open": 128.20,
-                    "high": 130.50,
-                    "low": 127.00,
-                    "close": 127.60,
-                },
-                {
-                    "time": "2025-12-12",
-                    "open": 127.60,
-                    "high": 128.90,
-                    "low": 125.10,
-                    "close": 126.40,
-                },
-                {
-                    "time": "2025-12-15",
-                    "open": 126.40,
-                    "high": 129.70,
-                    "low": 125.80,
-                    "close": 129.10,
-                },
-                {
-                    "time": "2025-12-16",
-                    "open": 129.10,
-                    "high": 132.40,
-                    "low": 128.60,
-                    "close": 131.85,
-                },
-                {
-                    "time": "2025-12-17",
-                    "open": 131.85,
-                    "high": 133.00,
-                    "low": 130.20,
-                    "close": 132.50,
-                },
-                {
-                    "time": "2025-12-18",
-                    "open": 132.50,
-                    "high": 134.80,
-                    "low": 131.30,
-                    "close": 134.10,
-                },
-                {
-                    "time": "2025-12-19",
-                    "open": 134.10,
-                    "high": 135.50,
-                    "low": 131.90,
-                    "close": 132.70,
-                },
-                {
-                    "time": "2025-12-22",
-                    "open": 132.70,
-                    "high": 134.20,
-                    "low": 130.50,
-                    "close": 133.60,
-                },
-                {
-                    "time": "2025-12-23",
-                    "open": 133.60,
-                    "high": 136.90,
-                    "low": 133.10,
-                    "close": 136.20,
-                },
-                {
-                    "time": "2025-12-24",
-                    "open": 136.20,
-                    "high": 137.50,
-                    "low": 135.00,
-                    "close": 136.80,
-                },
-                {
-                    "time": "2025-12-26",
-                    "open": 136.80,
-                    "high": 139.40,
-                    "low": 136.30,
-                    "close": 138.90,
-                },
-                {
-                    "time": "2025-12-29",
-                    "open": 138.90,
-                    "high": 141.20,
-                    "low": 138.10,
-                    "close": 140.50,
-                },
-                {
-                    "time": "2025-12-30",
-                    "open": 140.50,
-                    "high": 142.00,
-                    "low": 139.20,
-                    "close": 139.70,
-                },
-                {
-                    "time": "2025-12-31",
-                    "open": 139.70,
-                    "high": 141.50,
-                    "low": 138.80,
-                    "close": 141.00,
-                },
-                {
-                    "time": "2026-01-02",
-                    "open": 141.00,
-                    "high": 144.30,
-                    "low": 140.50,
-                    "close": 143.60,
-                },
-                {
-                    "time": "2026-01-05",
-                    "open": 143.60,
-                    "high": 146.80,
-                    "low": 142.90,
-                    "close": 145.90,
-                },
-                {
-                    "time": "2026-01-06",
-                    "open": 145.90,
-                    "high": 147.50,
-                    "low": 144.30,
-                    "close": 146.40,
-                },
-                {
-                    "time": "2026-01-07",
-                    "open": 146.40,
-                    "high": 149.20,
-                    "low": 145.70,
-                    "close": 148.80,
-                },
-                {
-                    "time": "2026-01-08",
-                    "open": 148.80,
-                    "high": 151.00,
-                    "low": 147.60,
-                    "close": 150.30,
-                },
-                {
-                    "time": "2026-01-09",
-                    "open": 150.30,
-                    "high": 152.40,
-                    "low": 149.10,
-                    "close": 151.70,
-                },
-                {
-                    "time": "2026-01-12",
-                    "open": 151.70,
-                    "high": 153.90,
-                    "low": 150.50,
-                    "close": 152.30,
-                },
-                {
-                    "time": "2026-01-13",
-                    "open": 152.30,
-                    "high": 154.10,
-                    "low": 149.80,
-                    "close": 150.60,
-                },
-                {
-                    "time": "2026-01-14",
-                    "open": 150.60,
-                    "high": 152.00,
-                    "low": 148.30,
-                    "close": 149.10,
-                },
-                {
-                    "time": "2026-01-15",
-                    "open": 149.10,
-                    "high": 151.50,
-                    "low": 148.00,
-                    "close": 150.90,
-                },
-                {
-                    "time": "2026-01-16",
-                    "open": 150.90,
-                    "high": 153.70,
-                    "low": 150.20,
-                    "close": 153.10,
-                },
-                {
-                    "time": "2026-01-20",
-                    "open": 153.10,
-                    "high": 156.40,
-                    "low": 152.60,
-                    "close": 155.80,
-                },
-                {
-                    "time": "2026-01-21",
-                    "open": 155.80,
-                    "high": 158.20,
-                    "low": 154.90,
-                    "close": 157.40,
-                },
-                {
-                    "time": "2026-01-22",
-                    "open": 157.40,
-                    "high": 159.00,
-                    "low": 155.60,
-                    "close": 156.20,
-                },
-                {
-                    "time": "2026-01-23",
-                    "open": 156.20,
-                    "high": 157.80,
-                    "low": 153.40,
-                    "close": 154.90,
-                },
-                {
-                    "time": "2026-01-26",
-                    "open": 154.90,
-                    "high": 157.30,
-                    "low": 154.10,
-                    "close": 156.70,
-                },
-                {
-                    "time": "2026-01-27",
-                    "open": 156.70,
-                    "high": 160.50,
-                    "low": 156.00,
-                    "close": 159.80,
-                },
-                {
-                    "time": "2026-01-28",
-                    "open": 159.80,
-                    "high": 162.30,
-                    "low": 158.70,
-                    "close": 161.50,
-                },
-                {
-                    "time": "2026-01-29",
-                    "open": 161.50,
-                    "high": 163.40,
-                    "low": 159.90,
-                    "close": 160.80,
-                },
-                {
-                    "time": "2026-01-30",
-                    "open": 160.80,
-                    "high": 162.10,
-                    "low": 157.50,
-                    "close": 158.40,
-                },
-                {
-                    "time": "2026-02-02",
-                    "open": 158.40,
-                    "high": 160.90,
-                    "low": 157.20,
-                    "close": 160.10,
-                },
-                {
-                    "time": "2026-02-03",
-                    "open": 160.10,
-                    "high": 163.70,
-                    "low": 159.50,
-                    "close": 163.20,
-                },
-                {
-                    "time": "2026-02-04",
-                    "open": 163.20,
-                    "high": 165.80,
-                    "low": 162.40,
-                    "close": 165.00,
-                },
-                {
-                    "time": "2026-02-05",
-                    "open": 165.00,
-                    "high": 167.30,
-                    "low": 163.80,
-                    "close": 164.50,
-                },
-                {
-                    "time": "2026-02-06",
-                    "open": 164.50,
-                    "high": 166.20,
-                    "low": 162.10,
-                    "close": 163.30,
-                },
-                {
-                    "time": "2026-02-09",
-                    "open": 163.30,
-                    "high": 165.70,
-                    "low": 162.50,
-                    "close": 165.10,
-                },
-                {
-                    "time": "2026-02-10",
-                    "open": 165.10,
-                    "high": 168.40,
-                    "low": 164.60,
-                    "close": 167.80,
-                },
-                {
-                    "time": "2026-02-11",
-                    "open": 167.80,
-                    "high": 170.20,
-                    "low": 166.90,
-                    "close": 169.50,
-                },
-                {
-                    "time": "2026-02-12",
-                    "open": 169.50,
-                    "high": 171.00,
-                    "low": 167.30,
-                    "close": 168.70,
-                },
-                {
-                    "time": "2026-02-13",
-                    "open": 168.70,
-                    "high": 170.50,
-                    "low": 166.40,
-                    "close": 167.20,
-                },
-                {
-                    "time": "2026-02-17",
-                    "open": 167.20,
-                    "high": 169.80,
-                    "low": 165.90,
-                    "close": 169.30,
-                },
-                {
-                    "time": "2026-02-18",
-                    "open": 169.30,
-                    "high": 172.60,
-                    "low": 168.70,
-                    "close": 172.10,
-                },
-                {
-                    "time": "2026-02-19",
-                    "open": 172.10,
-                    "high": 174.50,
-                    "low": 171.20,
-                    "close": 173.80,
-                },
-                {
-                    "time": "2026-02-20",
-                    "open": 173.80,
-                    "high": 175.30,
-                    "low": 171.60,
-                    "close": 172.40,
-                },
-                {
-                    "time": "2026-02-23",
-                    "open": 172.40,
-                    "high": 174.10,
-                    "low": 169.80,
-                    "close": 170.60,
-                },
-                {
-                    "time": "2026-02-24",
-                    "open": 170.60,
-                    "high": 172.90,
-                    "low": 168.50,
-                    "close": 169.20,
-                },
-                {
-                    "time": "2026-02-25",
-                    "open": 169.20,
-                    "high": 171.40,
-                    "low": 167.30,
-                    "close": 170.80,
-                },
-                {
-                    "time": "2026-02-26",
-                    "open": 170.80,
-                    "high": 173.50,
-                    "low": 170.10,
-                    "close": 172.90,
-                },
-                {
-                    "time": "2026-02-27",
-                    "open": 172.90,
-                    "high": 175.80,
-                    "low": 172.00,
-                    "close": 175.20,
-                },
-                {
-                    "time": "2026-03-02",
-                    "open": 175.20,
-                    "high": 177.60,
-                    "low": 174.30,
-                    "close": 176.90,
-                },
-                {
-                    "time": "2026-03-03",
-                    "open": 176.90,
-                    "high": 179.40,
-                    "low": 175.80,
-                    "close": 178.50,
-                },
-                {
-                    "time": "2026-03-04",
-                    "open": 178.50,
-                    "high": 180.10,
-                    "low": 176.40,
-                    "close": 177.30,
-                },
-                {
-                    "time": "2026-03-05",
-                    "open": 177.30,
-                    "high": 179.00,
-                    "low": 174.90,
-                    "close": 175.60,
-                },
-                {
-                    "time": "2026-03-06",
-                    "open": 175.60,
-                    "high": 177.20,
-                    "low": 173.10,
-                    "close": 174.40,
-                },
-                {
-                    "time": "2026-03-09",
-                    "open": 174.40,
-                    "high": 176.80,
-                    "low": 173.50,
-                    "close": 176.20,
-                },
-                {
-                    "time": "2026-03-10",
-                    "open": 176.20,
-                    "high": 179.50,
-                    "low": 175.70,
-                    "close": 178.90,
-                },
-                {
-                    "time": "2026-03-11",
-                    "open": 178.90,
-                    "high": 181.30,
-                    "low": 178.00,
-                    "close": 180.60,
-                },
-                {
-                    "time": "2026-03-12",
-                    "open": 180.60,
-                    "high": 182.90,
-                    "low": 179.40,
-                    "close": 182.10,
-                },
-                {
-                    "time": "2026-03-13",
-                    "open": 182.10,
-                    "high": 184.50,
-                    "low": 180.80,
-                    "close": 181.70,
-                },
-                {
-                    "time": "2026-03-16",
-                    "open": 181.70,
-                    "high": 183.40,
-                    "low": 179.20,
-                    "close": 180.30,
-                },
-                {
-                    "time": "2026-03-17",
-                    "open": 180.30,
-                    "high": 182.60,
-                    "low": 179.50,
-                    "close": 182.00,
-                },
-                {
-                    "time": "2026-03-18",
-                    "open": 182.00,
-                    "high": 185.30,
-                    "low": 181.40,
-                    "close": 184.70,
-                },
-                {
-                    "time": "2026-03-19",
-                    "open": 184.70,
-                    "high": 187.20,
-                    "low": 183.90,
-                    "close": 186.50,
-                },
-                {
-                    "time": "2026-03-20",
-                    "open": 186.50,
-                    "high": 188.00,
-                    "low": 184.60,
-                    "close": 185.80,
-                },
-                {
-                    "time": "2026-03-23",
-                    "open": 185.80,
-                    "high": 187.50,
-                    "low": 183.30,
-                    "close": 184.20,
-                },
-                {
-                    "time": "2026-03-24",
-                    "open": 184.20,
-                    "high": 186.90,
-                    "low": 183.70,
-                    "close": 186.40,
-                },
-                {
-                    "time": "2026-03-25",
-                    "open": 186.40,
-                    "high": 189.70,
-                    "low": 185.90,
-                    "close": 189.10,
-                },
-                {
-                    "time": "2026-03-26",
-                    "open": 189.10,
-                    "high": 191.50,
-                    "low": 188.20,
-                    "close": 190.80,
-                },
-                {
-                    "time": "2026-03-27",
-                    "open": 190.80,
-                    "high": 193.20,
-                    "low": 189.70,
-                    "close": 192.40,
-                },
-                {
-                    "time": "2026-03-30",
-                    "open": 192.40,
-                    "high": 194.80,
-                    "low": 191.30,
-                    "close": 193.60,
-                },
-                {
-                    "time": "2026-03-31",
-                    "open": 193.60,
-                    "high": 195.50,
-                    "low": 191.80,
-                    "close": 192.10,
-                },
-                {
-                    "time": "2026-04-01",
-                    "open": 192.10,
-                    "high": 194.30,
-                    "low": 190.60,
-                    "close": 193.80,
-                },
-                {
-                    "time": "2026-04-02",
-                    "open": 193.80,
-                    "high": 196.70,
-                    "low": 193.10,
-                    "close": 195.90,
-                },
-                {
-                    "time": "2026-04-03",
-                    "open": 195.90,
-                    "high": 197.40,
-                    "low": 193.50,
-                    "close": 194.30,
-                },
-                {
-                    "time": "2026-04-06",
-                    "open": 194.30,
-                    "high": 196.80,
-                    "low": 192.40,
-                    "close": 196.20,
-                },
-                {
-                    "time": "2026-04-07",
-                    "open": 196.20,
-                    "high": 199.50,
-                    "low": 195.60,
-                    "close": 198.80,
-                },
-                {
-                    "time": "2026-04-08",
-                    "open": 198.80,
-                    "high": 201.30,
-                    "low": 197.70,
-                    "close": 200.50,
-                },
-                {
-                    "time": "2026-04-09",
-                    "open": 200.50,
-                    "high": 203.10,
-                    "low": 199.40,
-                    "close": 202.30,
-                },
-                {
-                    "time": "2026-04-10",
-                    "open": 202.30,
-                    "high": 204.70,
-                    "low": 200.80,
-                    "close": 201.60,
-                },
-                {
-                    "time": "2026-04-13",
-                    "open": 201.60,
-                    "high": 203.90,
-                    "low": 199.50,
-                    "close": 203.40,
-                },
-                {
-                    "time": "2026-04-14",
-                    "open": 203.40,
-                    "high": 206.80,
-                    "low": 202.70,
-                    "close": 205.90,
-                },
-                {
-                    "time": "2026-04-15",
-                    "open": 205.90,
-                    "high": 208.20,
-                    "low": 204.60,
-                    "close": 207.50,
-                },
-                {
-                    "time": "2026-04-16",
-                    "open": 207.50,
-                    "high": 209.80,
-                    "low": 206.10,
-                    "close": 208.40,
-                },
-                {
-                    "time": "2026-04-17",
-                    "open": 208.40,
-                    "high": 210.50,
-                    "low": 206.80,
-                    "close": 207.10,
-                },
-                {
-                    "time": "2026-04-22",
-                    "open": 207.10,
-                    "high": 209.60,
-                    "low": 205.90,
-                    "close": 209.20,
-                },
-                {
-                    "time": "2026-04-23",
-                    "open": 209.20,
-                    "high": 214.50,
-                    "low": 208.70,
-                    "close": 213.80,
-                },
-            ],
-        }
-    return{"status": "error", "message": "Invalid chart read action"}
-
-@app.post("/dashboard/")
-def modify_dashboard(
-    session: str, action: str, index: str | None = None, time: str | None = None 
-):
-    if action =="GENERATE":
-        return{
-            "status": "success",
-            "message": f"New model generated for index {index}",
-        }
-    elif action =="TMPDELETE":
-        return{
-            "status": "success",
-            "message": f"Index {index} is deleted",
-        }
-    elif action =="DELETE":
-        return{
-            "status": "success",
-            "message": f"Index {index} is permanently deleted",
-        }
-    elif action =="RESTORE":
-        return{
-            "status": "success",
-            "message": f"Index {index} has been restored",
-        }
-    return {"status": "error", "message": "Invalid dashboard action"}
-
-@app.post("/chart/")
-def modify_chart(
-    session: str, action: str, index: str | None = None, time: str | None = None 
-):
-    if action == "REGEN":
-        try:
-            api_key = get_api_key()
-        except Exception:
-            pass
-        return{
-            "status": "success",
-            "message": f"New model for {index} has been retrained",
-            "data": [
-                {
-                "time": "2026-04-24",
-                "open": 213.80,
-                "close": 215.50,
-                "type": "forecast",  
+        # Pivot into per-symbol dicts
+        symbols: dict[str, dict] = {}
+        for sym, tf in rows:
+            if sym not in symbols:
+                symbols[sym] = {
+                    "idx_name": sym,
+                    "5M": False,
+                    "1H": False,
+                    "1D": False,
+                    "1W": False,
                 }
-            ],
-        }
-    return{"status": "error","message": "Invalid chart action"}
+            if tf in symbols[sym]:
+                symbols[sym][tf] = True
 
+        return {"status": "success", "data": list(symbols.values())}
+
+    if action == "GENERATE":
+        if not index or not time:
+            raise HTTPException(status_code=400, detail="index and time are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Insert into data table (model/data paths are placeholders until training runs)
+                cur.execute(
+                    """
+                    INSERT INTO data (user_id, symbol_name, timeframe, model_path, data_path)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    RETURNING id
+                    """,
+                    (
+                        user_id,
+                        index,
+                        time,
+                        f"models/{user_id}/{index}_{time}.pkl",
+                        f"data/{user_id}/{index}_{time}.json",
+                    ),
+                )
+                # Also ensure dashboard row exists
+                cur.execute(
+                    """
+                    INSERT INTO dashboard (user_id, symbol_name, timeframe)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (user_id, index, time),
+                )
+            conn.commit()
+        return {
+            "status": "success",
+            "message": f"New model generated for {index} [{time}]",
+        }
+
+    if action == "TMPDELETE":
+        if not index or not time:
+            raise HTTPException(status_code=400, detail="index and time are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE dashboard SET is_deleted = TRUE
+                    WHERE user_id = %s AND symbol_name = %s AND timeframe = %s
+                    """,
+                    (user_id, index, time),
+                )
+                cur.execute(
+                    """
+                    UPDATE data SET is_deleted = TRUE
+                    WHERE user_id = %s AND symbol_name = %s AND timeframe = %s
+                    """,
+                    (user_id, index, time),
+                )
+            conn.commit()
+        return {
+            "status": "success",
+            "message": f"{index} [{time}] flagged for deletion",
+        }
+
+    if action == "RESTORE":
+        validate_admin_session(session)
+        if not index or not time:
+            raise HTTPException(status_code=400, detail="index and time are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE dashboard SET is_deleted = FALSE
+                    WHERE symbol_name = %s AND timeframe = %s
+                    """,
+                    (index, time),
+                )
+                cur.execute(
+                    """
+                    UPDATE data SET is_deleted = FALSE
+                    WHERE symbol_name = %s AND timeframe = %s
+                    """,
+                    (index, time),
+                )
+            conn.commit()
+        return {"status": "success", "message": f"{index} [{time}] restored"}
+
+    if action == "DELETE":
+        validate_admin_session(session)
+        if not index or not time:
+            raise HTTPException(status_code=400, detail="index and time are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Cascade on data deletes candles too
+                cur.execute(
+                    "DELETE FROM data WHERE symbol_name = %s AND timeframe = %s",
+                    (index, time),
+                )
+                cur.execute(
+                    "DELETE FROM dashboard WHERE symbol_name = %s AND timeframe = %s",
+                    (index, time),
+                )
+            conn.commit()
+        return {"status": "success", "message": f"{index} [{time}] permanently deleted"}
+
+    raise HTTPException(status_code=400, detail=f"Unknown dashboard action: {action!r}")
+
+
+# ---------------------------------------------------------------------------
+# Chart  —  POST /chart?session=…&action=…&index=…&time=…
+#
+#   GET   – return candle rows (historical + forecast) from DB for index+time
+#   REGEN – re-fetch upstream, replace candles in DB, return fresh dataset
+# ---------------------------------------------------------------------------
+
+
+@api.post("/chart/")
+def chart(
+    session: str,
+    action: str,
+    index: str | None = None,
+    time: str | None = None,
+):
+    user_id = validate_session(session)
+
+    if not index or not time:
+        raise HTTPException(status_code=400, detail="index and time are required")
+
+    if action == "GET":
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT c.candle_close_timestamp, c.open, c.high, c.low, c.close, c.fake
+                    FROM candles c
+                    JOIN data d ON d.id = c.data_id
+                    WHERE d.user_id = %s AND d.symbol_name = %s AND d.timeframe = %s
+                    ORDER BY c.candle_close_timestamp
+                    """,
+                    (user_id, index, time),
+                )
+                rows = cur.fetchall()
+        if not rows:
+            raise HTTPException(status_code=404, detail=f"No data for {index} [{time}]")
+        return {"status": "success", "data": rows_to_candles(rows)}
+
+    if action == "REGEN":
+        # Pull fresh data from upstream, wipe old candles, store new ones
+        try:
+            raw = fetch_stock_data(index)
+            series = raw.get("Time Series (Daily)", {})
+            if not series:
+                raise ValueError("Empty series from upstream")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Upstream data error: {exc}")
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM data WHERE user_id = %s AND symbol_name = %s AND timeframe = %s",
+                    (user_id, index, time),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(
+                        status_code=404, detail=f"No data entry for {index} [{time}]"
+                    )
+                data_id = row[0]
+
+                cur.execute("DELETE FROM candles WHERE data_id = %s", (data_id,))
+
+                candle_rows = []
+                for date_str, ohlc in sorted(series.items()):
+                    ts = int(
+                        datetime.strptime(date_str, "%Y-%m-%d")
+                        .replace(tzinfo=timezone.utc)
+                        .timestamp()
+                    )
+                    candle_rows.append(
+                        (
+                            data_id,
+                            ts,
+                            ohlc["1. open"],
+                            ohlc["2. high"],
+                            ohlc["3. low"],
+                            ohlc["4. close"],
+                            False,
+                        )
+                    )
+
+                cur.executemany(
+                    """
+                    INSERT INTO candles
+                        (data_id, candle_close_timestamp, open, high, low, close, fake)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    candle_rows,
+                )
+            conn.commit()
+
+        # Re-fetch to return consistent shape
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT candle_close_timestamp, open, high, low, close, fake
+                    FROM candles WHERE data_id = %s
+                    ORDER BY candle_close_timestamp
+                    """,
+                    (data_id,),
+                )
+                rows = cur.fetchall()
+
+        return {
+            "status": "success",
+            "message": f"Model for {index} [{time}] retrained",
+            "data": rows_to_candles(rows),
+        }
+
+    raise HTTPException(status_code=400, detail=f"Unknown chart action: {action!r}")
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints  —  all require role='admin' session
+#
+#   GET  /admin/users                     – all users with their data rows
+#   DELETE /admin/users/{user_id}         – delete user (cascades everything)
+#   DELETE /admin/data/{data_id}          – hard-delete one data+candle entry
+#   POST   /admin/data/{data_id}/restore  – un-flag is_deleted on data+dashboard
+# ---------------------------------------------------------------------------
+
+
+@api.get("/admin/users")
+def admin_list_users(session: str):
+    validate_admin_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, role, created_at FROM users ORDER BY id")
+            users = cur.fetchall()
+            result = []
+            for uid, name, role, created in users:
+                cur.execute(
+                    """
+                    SELECT id, symbol_name, timeframe, is_deleted, created_at
+                    FROM data WHERE user_id = %s ORDER BY id
+                    """,
+                    (uid,),
+                )
+                data_rows = cur.fetchall()
+                result.append(
+                    {
+                        "id": uid,
+                        "name": name,
+                        "role": role,
+                        "created_at": created.isoformat(),
+                        "data": [
+                            {
+                                "id": d[0],
+                                "symbol_name": d[1],
+                                "timeframe": d[2],
+                                "deleted": d[3],
+                                "created_at": d[4].isoformat(),
+                            }
+                            for d in data_rows
+                        ],
+                    }
+                )
+    return result
+
+
+@api.delete("/admin/users/{target_user_id}")
+def admin_delete_user(target_user_id: int, session: str):
+    validate_admin_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE id = %s", (target_user_id,))
+        conn.commit()
+    return {"status": "success", "message": f"User {target_user_id} deleted"}
+
+
+@api.delete("/admin/data/{data_id}")
+def admin_delete_data(data_id: int, session: str):
+    validate_admin_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Get symbol+timeframe+user_id before deleting so we can clean dashboard too
+            cur.execute(
+                "SELECT user_id, symbol_name, timeframe FROM data WHERE id = %s",
+                (data_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Data entry not found")
+            uid, sym, tf = row
+            cur.execute("DELETE FROM data WHERE id = %s", (data_id,))
+            cur.execute(
+                "DELETE FROM dashboard WHERE user_id = %s AND symbol_name = %s AND timeframe = %s",
+                (uid, sym, tf),
+            )
+        conn.commit()
+    return {"status": "success", "message": f"Data entry {data_id} permanently deleted"}
+
+
+@api.post("/admin/data/{data_id}/restore")
+def admin_restore_data(data_id: int, session: str):
+    validate_admin_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id, symbol_name, timeframe FROM data WHERE id = %s",
+                (data_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Data entry not found")
+            uid, sym, tf = row
+            cur.execute("UPDATE data SET is_deleted = FALSE WHERE id = %s", (data_id,))
+            cur.execute(
+                """
+                UPDATE dashboard SET is_deleted = FALSE
+                WHERE user_id = %s AND symbol_name = %s AND timeframe = %s
+                """,
+                (uid, sym, tf),
+            )
+        conn.commit()
+    return {"status": "success", "message": f"Data entry {data_id} restored"}
+
+
+# ---------------------------------------------------------------------------
+# Register API router, then static (static must be LAST — it catches everything)
+# ---------------------------------------------------------------------------
+app.include_router(api)
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

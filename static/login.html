@@ -17,79 +17,56 @@
                             <li id="adminTab"><a onclick="showAdminLogin()">Admin</a></li>
                         </ul>
                     </div>
-                    
+
+                    <!-- User login + register -->
                     <div id="userSection" class="box">
                         <h1 class="title has-text-centered">User Login</h1>
                         <div id="loginMessage" class="notification is-hidden"></div>
-                        <form id="userLoginForm">
-                            <div class="field">
-                                <label class="label">Username</label>
-                                <div class="control">
-                                    <input id="userLoginUsername" class="input" type="text" placeholder="Username" required>
-                                </div>
-                            </div>
-                            <div class="field">
-                                <label class="label">Password</label>
-                                <div class="control">
-                                    <input id="userLoginPassword" class="input" type="password" placeholder="Password" required>
-                                </div>
-                            </div>
-                            <div class="field">
-                                <div class="control">
-                                    <button type="submit" class="button is-primary is-fullwidth">Login</button>
-                                </div>
-                            </div>
-                        </form>
+
+                        <div class="field"><label class="label">Username</label>
+                            <div class="control"><input id="userLoginUsername" class="input" type="text" placeholder="Username"></div>
+                        </div>
+                        <div class="field"><label class="label">Password</label>
+                            <div class="control"><input id="userLoginPassword" class="input" type="password" placeholder="Password"></div>
+                        </div>
+                        <div class="field">
+                            <div class="control"><button class="button is-primary is-fullwidth" onclick="doLogin()">Login</button></div>
+                        </div>
+
                         <hr>
                         <h2 class="subtitle has-text-centered">Register</h2>
-                        <form id="registerForm">
-                            <div class="field">
-                                <label class="label">Username</label>
-                                <div class="control">
-                                    <input id="registerUsername" class="input" type="text" placeholder="Username" required>
-                                </div>
-                            </div>
-                            <div class="field">
-                                <label class="label">Email</label>
-                                <div class="control">
-                                    <input id="registerEmail" class="input" type="email" placeholder="Email" required>
-                                </div>
-                            </div>
-                            <div class="field">
-                                <label class="label">Password</label>
-                                <div class="control">
-                                    <input id="registerPassword" class="input" type="password" placeholder="Password" required>
-                                </div>
-                            </div>
-                            <div class="field">
-                                <div class="control">
-                                    <button type="submit" class="button is-link is-fullwidth">Register</button>
-                                </div>
-                            </div>
-                        </form>
+
+                        <div class="field"><label class="label">Username</label>
+                            <div class="control"><input id="registerUsername" class="input" type="text" placeholder="Username"></div>
+                        </div>
+                        <div class="field"><label class="label">Password</label>
+                            <div class="control"><input id="registerPassword" class="input" type="password" placeholder="Password"></div>
+                        </div>
+                        <div class="field">
+                            <div class="control"><button class="button is-link is-fullwidth" onclick="doRegister()">Register</button></div>
+                        </div>
                     </div>
-                    
-                    <div id="adminSection" class="box" style="display: none;">
+
+                    <!-- Admin login -->
+                    <div id="adminSection" class="box" style="display:none;">
                         <h1 class="title has-text-centered">Admin Login</h1>
-                        <form id="adminLoginForm">
-                            <div class="field">
-                                <label class="label">Admin Password</label>
-                                <div class="control">
-                                    <input id="adminLoginPassword" class="input" type="password" placeholder="Admin Password" required>
-                                </div>
-                            </div>
-                            <div class="field">
-                                <div class="control">
-                                    <button type="submit" class="button is-danger is-fullwidth">Admin Login</button>
-                                </div>
-                            </div>
-                        </form>
+                        <div id="adminMessage" class="notification is-hidden"></div>
+
+                        <div class="field"><label class="label">Username</label>
+                            <div class="control"><input id="adminUsername" class="input" type="text" placeholder="Admin username"></div>
+                        </div>
+                        <div class="field"><label class="label">Password</label>
+                            <div class="control"><input id="adminPassword" class="input" type="password" placeholder="Admin password"></div>
+                        </div>
+                        <div class="field">
+                            <div class="control"><button class="button is-danger is-fullwidth" onclick="doAdminLogin()">Admin Login</button></div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </section>
-    
+
     <script>
         function showUserLogin() {
             document.getElementById('userSection').style.display = 'block';
@@ -97,7 +74,7 @@
             document.getElementById('userTab').classList.add('is-active');
             document.getElementById('adminTab').classList.remove('is-active');
         }
-        
+
         function showAdminLogin() {
             document.getElementById('userSection').style.display = 'none';
             document.getElementById('adminSection').style.display = 'block';
@@ -105,48 +82,87 @@
             document.getElementById('adminTab').classList.add('is-active');
         }
 
-        function setMessage(message, type = 'is-info') {
-            const messageBox = document.getElementById('loginMessage');
-            messageBox.className = `notification ${type}`;
-            messageBox.textContent = message;
-            messageBox.classList.remove('is-hidden');
+        function setMessage(id, text, type = 'is-info') {
+            const el = document.getElementById(id);
+            el.className = `notification ${type}`;
+            el.textContent = text;
+            el.classList.remove('is-hidden');
         }
 
-        document.getElementById('userLoginForm').addEventListener('submit', function(event) {
-            event.preventDefault();
+        async function doLogin() {
             const username = document.getElementById('userLoginUsername').value.trim();
             const password = document.getElementById('userLoginPassword').value.trim();
             if (!username || !password) {
-                setMessage('Please enter both username and password.', 'is-warning');
+                setMessage('loginMessage', 'Please enter username and password.', 'is-warning');
                 return;
             }
-            setMessage('Logged in as user. Redirecting...', 'is-success');
-            window.location.href = 'dashboard.html?session=userdemo';
-        });
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                });
+                const text = await res.text();
+                let data;
+                try { data = JSON.parse(text); }
+                catch { setMessage('loginMessage', `Server returned non-JSON (is main.py running?): ${text.slice(0,120)}`, 'is-danger'); return; }
+                if (!res.ok) { setMessage('loginMessage', data.detail || 'Login failed.', 'is-danger'); return; }
+                window.location.href = `dashboard.html?session=${data.session_id}`;
+            } catch (err) {
+                setMessage('loginMessage', `Network error: ${err.message}`, 'is-danger');
+            }
+        }
 
-        document.getElementById('registerForm').addEventListener('submit', function(event) {
-            event.preventDefault();
+        async function doRegister() {
             const username = document.getElementById('registerUsername').value.trim();
-            const email = document.getElementById('registerEmail').value.trim();
             const password = document.getElementById('registerPassword').value.trim();
-            if (!username || !email || !password) {
-                setMessage('Please complete all registration fields.', 'is-warning');
+            if (!username || !password) {
+                setMessage('loginMessage', 'Please fill in all fields.', 'is-warning');
                 return;
             }
-            setMessage('Registration complete. Logging in...', 'is-success');
-            window.location.href = 'dashboard.html?session=userdemo';
-        });
+            try {
+                const res = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                });
+                const text = await res.text();
+                let data;
+                try { data = JSON.parse(text); }
+                catch { setMessage('loginMessage', `Server returned non-JSON (is main.py running?): ${text.slice(0,120)}`, 'is-danger'); return; }
+                if (!res.ok) { setMessage('loginMessage', data.detail || 'Registration failed.', 'is-danger'); return; }
+                setMessage('loginMessage', 'Registered! Logging in...', 'is-success');
+                document.getElementById('userLoginUsername').value = username;
+                document.getElementById('userLoginPassword').value = password;
+                await doLogin();
+            } catch (err) {
+                setMessage('loginMessage', `Network error: ${err.message}`, 'is-danger');
+            }
+        }
 
-        document.getElementById('adminLoginForm').addEventListener('submit', function(event) {
-            event.preventDefault();
-            const password = document.getElementById('adminLoginPassword').value.trim();
-            if (!password) {
-                setMessage('Please enter admin password.', 'is-warning');
+        async function doAdminLogin() {
+            const username = document.getElementById('adminUsername').value.trim();
+            const password = document.getElementById('adminPassword').value.trim();
+            if (!username || !password) {
+                setMessage('adminMessage', 'Please enter username and password.', 'is-warning');
                 return;
             }
-            setMessage('Logged in as admin. Redirecting...', 'is-success');
-            window.location.href = 'dashboard.html?session=admindemo';
-        });
+            try {
+                const res = await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                });
+                const text = await res.text();
+                let data;
+                try { data = JSON.parse(text); }
+                catch { setMessage('adminMessage', `Server returned non-JSON (is main.py running?): ${text.slice(0,120)}`, 'is-danger'); return; }
+                if (!res.ok) { setMessage('adminMessage', data.detail || 'Login failed.', 'is-danger'); return; }
+                window.location.href = `admin_dashboard.html?session=${data.session_id}`;
+            } catch (err) {
+                setMessage('adminMessage', `Network error: ${err.message}`, 'is-danger');
+            }
+        }
     </script>
 </body>
 </html>
