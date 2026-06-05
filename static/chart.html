@@ -22,6 +22,20 @@
                     </div>
                 </div>
 
+                <!-- AlphaVantage API key — for future live-pull functionality -->
+                <div class="px-4 pb-3 has-background-white" id="apiKeyBanner">
+                    <p class="is-size-7 has-text-grey mb-2">
+                        To regenerate forecasts with live data, enter your AlphaVantage API key.
+                        It is passed to the server for the request and <strong>never stored</strong>.
+                    </p>
+                    <div class="field has-addons mb-0">
+                        <div class="control is-expanded">
+                            <input id="chartApiKey" class="input is-small" type="password"
+                                placeholder="AlphaVantage API key (optional)">
+                        </div>
+                    </div>
+                </div>
+
                 <div id="chart" style="height: 450px; width: 100%;"></div>
 
                 <div class="p-4 has-background-white-bis">
@@ -37,10 +51,13 @@
     </div>
 
     <script>
-        const params = new URLSearchParams(window.location.search);
-        const session = params.get('session');
-        const index   = params.get('index') || '';
-        const time    = params.get('time')  || '';
+        const params   = new URLSearchParams(window.location.search);
+        const session  = params.get('session');
+        const index    = params.get('index')   || '';
+        const time     = params.get('time')    || '';
+        const dash_id  = params.get('dash_id') || '';
+        const username = localStorage.getItem('qo_username') || 'user';
+        const LS_KEY   = `qo_av_key_${username}`;
 
         document.getElementById('indexTitle').innerText = index || 'No Index';
         document.getElementById('timeTitle').innerText  = `Timeframe: ${time || 'N/A'}`;
@@ -52,22 +69,32 @@
             let payload;
             try {
                 // FIX: relative URL, correct index+time from params
+                const apiKey  = localStorage.getItem(LS_KEY) || '';
+                const savedKey = document.getElementById('chartApiKey')?.value.trim() || apiKey;
+                const keyParam = savedKey ? `&api_key=${encodeURIComponent(savedKey)}` : '';
+                const didParam = dash_id  ? `&dash_id=${encodeURIComponent(dash_id)}`  : '';
                 const res = await fetch(
-                    `/api/chart/?session=${session}&action=GET&index=${encodeURIComponent(index)}&time=${encodeURIComponent(time)}`,
+                    `/api/chart/?session=${session}&action=GET&index=${encodeURIComponent(index)}&time=${encodeURIComponent(time)}${didParam}${keyParam}`,
                     { method: 'POST' }
                 );
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 payload = await res.json();
             } catch (err) {
+                const isPremium = (err.message.includes('502') || err.message.includes('rate limit'))
+                    && (time === '5M' || time === '1H');
+                const msg = isPremium
+                    ? '5M and 1H charts require a premium AlphaVantage API plan.'
+                    : `Failed to load chart: ${err.message}`;
+                const cls = isPremium ? 'has-text-warning-dark' : 'has-text-danger';
                 document.getElementById('chart').innerHTML =
-                    `<p class="has-text-danger p-4">Failed to load chart: ${err.message}</p>`;
+                    `<p class="${cls} p-4">${msg}</p>`;
                 return;
             }
 
             // FIX: API returns candle_close_timestamp (UNIX seconds).
             // LightweightCharts v4+ candlestick series needs { time, open, high, low, close }
             // where `time` is a UNIX timestamp (number) or "YYYY-MM-DD" string.
-            const candles = payload.data.map(d => ({
+            const candles = (payload.data?.data || payload.data || []).map(d => ({
                 time:  parseInt(d.candle_close_timestamp, 10),
                 open:  parseFloat(d.open),
                 high:  parseFloat(d.high),
@@ -140,6 +167,14 @@
                 guideOpen = !guideOpen;
                 document.getElementById('guidePopup').style.display = guideOpen ? 'grid' : 'none';
             });
+        });
+
+        // Autoload + autosave API key using per-user key
+        const _savedKey = localStorage.getItem(LS_KEY);
+        if (_savedKey) document.getElementById('chartApiKey').value = _savedKey;
+        document.getElementById('chartApiKey').addEventListener('change', () => {
+            const v = document.getElementById('chartApiKey').value.trim();
+            if (v) localStorage.setItem(LS_KEY, v);
         });
     </script>
 </body>

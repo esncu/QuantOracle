@@ -18,9 +18,8 @@
                         </ul>
                     </div>
 
-                    <!-- User login + register -->
                     <div id="userSection" class="box">
-                        <h1 class="title has-text-centered">User Login</h1>
+                        <h1 class="title has-text-centered">Login</h1>
                         <div id="loginMessage" class="notification is-hidden"></div>
 
                         <div class="field"><label class="label">Username</label>
@@ -32,12 +31,16 @@
                         <div class="field">
                             <div class="control"><button class="button is-primary is-fullwidth" onclick="doLogin()">Login</button></div>
                         </div>
+                        <p class="has-text-centered is-size-7"><a onclick="showRecovery()">Forgot password?</a></p>
 
                         <hr>
                         <h2 class="subtitle has-text-centered">Register</h2>
 
                         <div class="field"><label class="label">Username</label>
                             <div class="control"><input id="registerUsername" class="input" type="text" placeholder="Username"></div>
+                        </div>
+                        <div class="field"><label class="label">Email</label>
+                            <div class="control"><input id="registerEmail" class="input" type="email" placeholder="you@example.com"></div>
                         </div>
                         <div class="field"><label class="label">Password</label>
                             <div class="control"><input id="registerPassword" class="input" type="password" placeholder="Password"></div>
@@ -47,11 +50,34 @@
                         </div>
                     </div>
 
+                    <!-- Recovery -->
+                    <div id="recoverySection" class="box" style="display:none;">
+                        <h1 class="title has-text-centered is-5">Password Recovery</h1>
+                        <div id="recoveryMessage" class="notification is-hidden"></div>
+
+                        <div id="recoveryStep1">
+                            <div class="field"><label class="label">Email</label>
+                                <div class="control"><input id="recoveryEmail" class="input" type="email" placeholder="your@email.com"></div>
+                            </div>
+                            <button class="button is-warning is-fullwidth" onclick="doRecoveryRequest()">Send Code</button>
+                        </div>
+
+                        <div id="recoveryStep2" style="display:none;">
+                            <div class="field"><label class="label">6-digit code</label>
+                                <div class="control"><input id="recoveryOtp" class="input" type="text" placeholder="123456" maxlength="6"></div>
+                            </div>
+                            <div class="field"><label class="label">New Password</label>
+                                <div class="control"><input id="recoveryNewPw" class="input" type="password" placeholder="New password"></div>
+                            </div>
+                            <button class="button is-success is-fullwidth" onclick="doRecoveryConfirm()">Set Password</button>
+                        </div>
+                        <p class="has-text-centered is-size-7 mt-3"><a onclick="showUserLogin()">← Back to login</a></p>
+                    </div>
+
                     <!-- Admin login -->
                     <div id="adminSection" class="box" style="display:none;">
                         <h1 class="title has-text-centered">Admin Login</h1>
                         <div id="adminMessage" class="notification is-hidden"></div>
-
                         <div class="field"><label class="label">Username</label>
                             <div class="control"><input id="adminUsername" class="input" type="text" placeholder="Admin username"></div>
                         </div>
@@ -68,100 +94,111 @@
     </section>
 
     <script>
+        let recoverySessionId = null;
+
         function showUserLogin() {
             document.getElementById('userSection').style.display = 'block';
             document.getElementById('adminSection').style.display = 'none';
+            document.getElementById('recoverySection').style.display = 'none';
             document.getElementById('userTab').classList.add('is-active');
             document.getElementById('adminTab').classList.remove('is-active');
         }
-
         function showAdminLogin() {
             document.getElementById('userSection').style.display = 'none';
             document.getElementById('adminSection').style.display = 'block';
+            document.getElementById('recoverySection').style.display = 'none';
             document.getElementById('userTab').classList.remove('is-active');
             document.getElementById('adminTab').classList.add('is-active');
         }
+        function showRecovery() {
+            document.getElementById('userSection').style.display = 'none';
+            document.getElementById('recoverySection').style.display = 'block';
+        }
 
-        function setMessage(id, text, type = 'is-info') {
+        function setMsg(id, text, type = 'is-info') {
             const el = document.getElementById(id);
             el.className = `notification ${type}`;
             el.textContent = text;
             el.classList.remove('is-hidden');
         }
 
+        async function apiFetch(url, body) {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const text = await res.text();
+            let data;
+            try { data = JSON.parse(text); }
+            catch { throw new Error(`Non-JSON response: ${text.slice(0, 120)}`); }
+            if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+            return data;
+        }
+
         async function doLogin() {
             const username = document.getElementById('userLoginUsername').value.trim();
             const password = document.getElementById('userLoginPassword').value.trim();
-            if (!username || !password) {
-                setMessage('loginMessage', 'Please enter username and password.', 'is-warning');
-                return;
-            }
+            if (!username || !password) { setMsg('loginMessage', 'Enter username and password.', 'is-warning'); return; }
             try {
-                const res = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password }),
-                });
-                const text = await res.text();
-                let data;
-                try { data = JSON.parse(text); }
-                catch { setMessage('loginMessage', `Server returned non-JSON (is main.py running?): ${text.slice(0,120)}`, 'is-danger'); return; }
-                if (!res.ok) { setMessage('loginMessage', data.detail || 'Login failed.', 'is-danger'); return; }
+                const data = await apiFetch('/api/login', { username, password });
+                localStorage.setItem('qo_session', data.session_id);
+                localStorage.setItem('qo_username', username);
                 window.location.href = `dashboard.html?session=${data.session_id}`;
-            } catch (err) {
-                setMessage('loginMessage', `Network error: ${err.message}`, 'is-danger');
-            }
+            } catch (e) { setMsg('loginMessage', e.message, 'is-danger'); }
         }
 
         async function doRegister() {
             const username = document.getElementById('registerUsername').value.trim();
+            const email    = document.getElementById('registerEmail').value.trim();
             const password = document.getElementById('registerPassword').value.trim();
-            if (!username || !password) {
-                setMessage('loginMessage', 'Please fill in all fields.', 'is-warning');
-                return;
-            }
+            if (!username || !email || !password) { setMsg('loginMessage', 'Fill in all fields.', 'is-warning'); return; }
             try {
-                const res = await fetch('/api/register', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password }),
-                });
-                const text = await res.text();
-                let data;
-                try { data = JSON.parse(text); }
-                catch { setMessage('loginMessage', `Server returned non-JSON (is main.py running?): ${text.slice(0,120)}`, 'is-danger'); return; }
-                if (!res.ok) { setMessage('loginMessage', data.detail || 'Registration failed.', 'is-danger'); return; }
-                setMessage('loginMessage', 'Registered! Logging in...', 'is-success');
+                await apiFetch('/api/register', { username, password, email });
+                setMsg('loginMessage', 'Registered! Logging in…', 'is-success');
                 document.getElementById('userLoginUsername').value = username;
                 document.getElementById('userLoginPassword').value = password;
                 await doLogin();
-            } catch (err) {
-                setMessage('loginMessage', `Network error: ${err.message}`, 'is-danger');
-            }
+            } catch (e) { setMsg('loginMessage', e.message, 'is-danger'); }
         }
 
         async function doAdminLogin() {
             const username = document.getElementById('adminUsername').value.trim();
             const password = document.getElementById('adminPassword').value.trim();
-            if (!username || !password) {
-                setMessage('adminMessage', 'Please enter username and password.', 'is-warning');
-                return;
-            }
+            if (!username || !password) { setMsg('adminMessage', 'Enter credentials.', 'is-warning'); return; }
             try {
-                const res = await fetch('/api/admin/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password }),
-                });
-                const text = await res.text();
-                let data;
-                try { data = JSON.parse(text); }
-                catch { setMessage('adminMessage', `Server returned non-JSON (is main.py running?): ${text.slice(0,120)}`, 'is-danger'); return; }
-                if (!res.ok) { setMessage('adminMessage', data.detail || 'Login failed.', 'is-danger'); return; }
+                const data = await apiFetch('/api/admin/login', { username, password });
                 window.location.href = `admin_dashboard.html?session=${data.session_id}`;
-            } catch (err) {
-                setMessage('adminMessage', `Network error: ${err.message}`, 'is-danger');
-            }
+            } catch (e) { setMsg('adminMessage', e.message, 'is-danger'); }
+        }
+
+        async function doRecoveryRequest() {
+            const email = document.getElementById('recoveryEmail').value.trim();
+            if (!email) { setMsg('recoveryMessage', 'Enter your email.', 'is-warning'); return; }
+            try {
+                const data = await apiFetch('/api/recover/request', { email });
+                recoverySessionId = data.session_id;
+                document.getElementById('recoveryStep1').style.display = 'none';
+                document.getElementById('recoveryStep2').style.display = 'block';
+                setMsg('recoveryMessage', 'Code sent — check your email (or server console for testing).', 'is-info');
+            } catch (e) { setMsg('recoveryMessage', e.message, 'is-danger'); }
+        }
+
+        async function doRecoveryConfirm() {
+            const otp         = document.getElementById('recoveryOtp').value.trim();
+            const new_password = document.getElementById('recoveryNewPw').value.trim();
+            if (!otp || !new_password) { setMsg('recoveryMessage', 'Fill in all fields.', 'is-warning'); return; }
+            try {
+                await apiFetch('/api/recover/confirm', { session_id: recoverySessionId, otp, new_password });
+                setMsg('recoveryMessage', 'Password updated! You can now log in.', 'is-success');
+                setTimeout(showUserLogin, 1500);
+            } catch (e) { setMsg('recoveryMessage', e.message, 'is-danger'); }
+        }
+
+        // Auto-switch to admin tab if coming from index.html admin button
+        if (localStorage.getItem('loginTab') === 'admin') {
+            localStorage.removeItem('loginTab');
+            showAdminLogin();
         }
     </script>
 </body>

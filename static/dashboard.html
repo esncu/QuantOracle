@@ -5,11 +5,27 @@
     <title>QuantOracle | Dashboard</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
     <style>
-        .status-box { width: 35px; height: 35px; border-radius: 4px; display: inline-block; cursor: pointer; transition: 0.2s; }
-        .is-trained { background-color: #48c78e; }
-        .is-untrained { background-color: #f14668; }
-        .status-box:hover { opacity: 0.8; transform: scale(1.05); }
-        .index-row { border-bottom: 1px solid #eee; padding: 15px 0; }
+        .status-box {
+            width: 32px; height: 32px; border-radius: 4px;
+            display: inline-block; cursor: pointer;
+            transition: opacity 0.15s, transform 0.15s;
+        }
+        .is-ready   { background-color: #48c78e; }
+        .is-pending { background-color: #f14668; }
+        .is-premium { background-color: #f5d76e; }
+        .status-box:hover { opacity: 0.75; transform: scale(1.08); }
+
+        .dash-panel { display: none; }
+        .dash-panel.is-active { display: block; }
+
+        .index-row { display: flex; align-items: center; border-bottom: 1px solid #eee; padding: 10px 0; }
+        .col-name   { flex: 0 0 33%; font-weight: 600; }
+        .col-tf     { flex: 1; text-align: center; }
+        .col-action { flex: 0 0 40px; text-align: center; }
+
+        .dash-tab { cursor: pointer; }
+        .dash-tab.is-active { font-weight: bold; border-bottom: 2px solid #3273dc; }
+        .tab-rename-input { font-size: 0.9rem; border: 1px solid #ccc; border-radius: 3px; padding: 2px 6px; width: 120px; }
     </style>
 </head>
 <body class="has-background-light">
@@ -17,18 +33,30 @@
 
     <section class="section">
         <div class="container">
-            <div class="box p-6">
-                <div class="columns is-mobile has-text-centered has-text-weight-bold grey-light">
-                    <div class="column is-4 has-text-left">Index</div>
-                    <div class="column">5M</div><div class="column">1H</div><div class="column">1D</div><div class="column">1W</div>
-                    <div class="column is-narrow"><div style="width: 30px;"></div></div>
+
+            <!-- API key bar -->
+            <div class="box mb-4 py-3 px-4">
+                <div class="is-flex is-align-items-center" style="gap:12px; flex-wrap:wrap;">
+                    <span class="has-text-weight-semibold is-size-7 has-text-grey" style="white-space:nowrap">AlphaVantage API Key</span>
+                    <input id="dashApiKey" class="input is-small" type="password"
+                        placeholder="Enter key to pull live data (never stored on server)"
+                        style="max-width:400px;">
+                    <span id="keyStatus" class="is-size-7 has-text-success" style="white-space:nowrap"></span>
+                </div>
+                <p class="is-size-7 has-text-grey mt-2">
+                    <span style="display:inline-block;width:11px;height:11px;background:#f5d76e;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>
+                    Yellow timeframes (5M, 1H) require a premium AlphaVantage plan.
+                </p>
+            </div>
+
+            <!-- Dashboard tabs -->
+            <div class="box p-0">
+                <div class="px-4 pt-4 pb-0 is-flex is-align-items-center" style="gap:6px; border-bottom:1px solid #eee; flex-wrap:wrap;" id="dashTabs">
+                    <!-- tabs injected by JS -->
                 </div>
 
-                <div id="index-container">
-                    <!-- Dynamically generated index rows will be inserted here -->
-                </div>
-
-                <div class="mt-5"><input class="input" type="text" placeholder="Track new index...."></div>
+                <!-- Dashboard panels injected by JS -->
+                <div id="dashPanels" class="p-4"></div>
             </div>
         </div>
     </section>
@@ -38,20 +66,14 @@
         async function insertTopbar() {
             try {
                 const resp = await fetch('template.html');
-                if (!resp.ok) throw new Error('Failed to load topbar template');
+                if (!resp.ok) throw new Error('no template');
                 const html = await resp.text();
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(html, 'text/html');
-                const template = doc.querySelector('#topbar-template');
-                if (!template) throw new Error('Topbar template not found');
-
-                const topbarContent = template.content.cloneNode(true);
-                document.getElementById('topbar-container').appendChild(topbarContent);
-            } catch (error) {
-                console.warn(error);
-            }
+                const doc  = new DOMParser().parseFromString(html, 'text/html');
+                const tmpl = doc.querySelector('#topbar-template');
+                if (!tmpl) throw new Error('no template tag');
+                document.getElementById('topbar-container').appendChild(tmpl.content.cloneNode(true));
+            } catch (e) { console.warn('Topbar:', e); }
         }
-
         insertTopbar();
     </script>
 </body>

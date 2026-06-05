@@ -1,0 +1,802 @@
+[
+  {
+    "candle_close_timestamp": "1768176000",
+    "open": "183.2200",
+    "high": "187.1200",
+    "low": "183.0200",
+    "close": "184.9400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1768262400",
+    "open": "184.9950",
+    "high": "188.1099",
+    "low": "183.4000",
+    "close": "185.8100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1768348800",
+    "open": "184.3200",
+    "high": "184.4600",
+    "low": "180.8000",
+    "close": "183.1400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1768435200",
+    "open": "186.5000",
+    "high": "189.7000",
+    "low": "186.3300",
+    "close": "187.0500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1768521600",
+    "open": "189.0750",
+    "high": "190.4400",
+    "low": "186.0800",
+    "close": "186.2300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1768867200",
+    "open": "181.9000",
+    "high": "182.3786",
+    "low": "177.6100",
+    "close": "178.0700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1768953600",
+    "open": "179.0500",
+    "high": "185.3790",
+    "low": "178.4000",
+    "close": "183.3200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769040000",
+    "open": "184.7500",
+    "high": "186.1700",
+    "low": "183.9300",
+    "close": "184.8400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769126400",
+    "open": "187.5000",
+    "high": "189.6000",
+    "low": "186.8233",
+    "close": "187.6700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769385600",
+    "open": "187.1600",
+    "high": "189.1200",
+    "low": "185.9900",
+    "close": "186.4700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769472000",
+    "open": "187.2400",
+    "high": "190.0000",
+    "low": "185.7000",
+    "close": "188.5200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769558400",
+    "open": "191.2700",
+    "high": "192.3500",
+    "low": "189.8400",
+    "close": "191.5200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769644800",
+    "open": "191.3400",
+    "high": "193.4800",
+    "low": "186.0600",
+    "close": "192.5100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769731200",
+    "open": "191.2100",
+    "high": "194.4900",
+    "low": "189.4700",
+    "close": "191.1300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1769990400",
+    "open": "187.2000",
+    "high": "190.3000",
+    "low": "184.8800",
+    "close": "185.6100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770076800",
+    "open": "186.2400",
+    "high": "186.2700",
+    "low": "176.2300",
+    "close": "180.3400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770163200",
+    "open": "179.4600",
+    "high": "179.5800",
+    "low": "171.9100",
+    "close": "174.1900",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770249600",
+    "open": "174.9250",
+    "high": "176.8150",
+    "low": "171.0300",
+    "close": "171.8800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770336000",
+    "open": "176.6900",
+    "high": "187.0000",
+    "low": "174.6000",
+    "close": "185.4100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770595200",
+    "open": "184.2600",
+    "high": "193.6600",
+    "low": "183.9500",
+    "close": "190.0400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770681600",
+    "open": "191.3800",
+    "high": "192.4800",
+    "low": "188.1200",
+    "close": "188.5400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770768000",
+    "open": "192.4500",
+    "high": "193.2600",
+    "low": "188.7700",
+    "close": "190.0500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770854400",
+    "open": "193.0300",
+    "high": "193.6100",
+    "low": "186.5100",
+    "close": "186.9400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1770940800",
+    "open": "187.4750",
+    "high": "187.5000",
+    "low": "181.5900",
+    "close": "182.8100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1771286400",
+    "open": "181.7500",
+    "high": "187.1500",
+    "low": "179.1800",
+    "close": "184.9700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1771372800",
+    "open": "188.7500",
+    "high": "190.3700",
+    "low": "186.7600",
+    "close": "187.9800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1771459200",
+    "open": "187.0550",
+    "high": "188.4300",
+    "low": "185.6600",
+    "close": "187.9000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1771545600",
+    "open": "186.5700",
+    "high": "190.3300",
+    "low": "185.9378",
+    "close": "189.8200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1771804800",
+    "open": "191.4000",
+    "high": "193.9500",
+    "low": "189.5750",
+    "close": "191.5500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1771891200",
+    "open": "191.4900",
+    "high": "193.7700",
+    "low": "187.4000",
+    "close": "192.8500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1771977600",
+    "open": "194.4500",
+    "high": "197.6299",
+    "low": "193.7900",
+    "close": "195.5600",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1772064000",
+    "open": "194.2700",
+    "high": "194.2900",
+    "low": "184.3150",
+    "close": "184.8900",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1772150400",
+    "open": "181.2500",
+    "high": "182.5900",
+    "low": "176.3800",
+    "close": "177.1900",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1772409600",
+    "open": "175.0100",
+    "high": "183.4600",
+    "low": "174.6400",
+    "close": "182.4800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1772496000",
+    "open": "178.4900",
+    "high": "180.9000",
+    "low": "176.9200",
+    "close": "180.0500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1772582400",
+    "open": "180.4400",
+    "high": "184.7000",
+    "low": "180.0600",
+    "close": "183.0400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1772668800",
+    "open": "181.1700",
+    "high": "184.0600",
+    "low": "177.8800",
+    "close": "183.3400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1772755200",
+    "open": "179.8400",
+    "high": "182.7561",
+    "low": "176.8201",
+    "close": "177.8200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773014400",
+    "open": "176.8300",
+    "high": "182.9100",
+    "low": "175.5600",
+    "close": "182.6500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773100800",
+    "open": "182.4000",
+    "high": "186.4400",
+    "low": "182.0100",
+    "close": "184.7700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773187200",
+    "open": "185.9100",
+    "high": "187.6200",
+    "low": "184.4500",
+    "close": "186.0300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773273600",
+    "open": "184.0500",
+    "high": "184.9400",
+    "low": "181.7500",
+    "close": "183.1400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773360000",
+    "open": "184.9200",
+    "high": "186.0900",
+    "low": "179.9400",
+    "close": "180.2500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773619200",
+    "open": "182.9700",
+    "high": "188.8800",
+    "low": "181.4100",
+    "close": "183.2200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773705600",
+    "open": "185.0600",
+    "high": "185.4000",
+    "low": "181.6804",
+    "close": "181.9300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773792000",
+    "open": "182.4800",
+    "high": "183.3800",
+    "low": "180.3300",
+    "close": "180.4000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773878400",
+    "open": "178.0100",
+    "high": "179.9800",
+    "low": "175.7850",
+    "close": "178.5600",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1773964800",
+    "open": "178.0000",
+    "high": "178.2600",
+    "low": "171.7200",
+    "close": "172.7000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1774224000",
+    "open": "177.2550",
+    "high": "178.3700",
+    "low": "174.7600",
+    "close": "175.6400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1774310400",
+    "open": "174.8300",
+    "high": "176.2200",
+    "low": "173.9800",
+    "close": "175.2000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1774396800",
+    "open": "177.1000",
+    "high": "181.2200",
+    "low": "176.8500",
+    "close": "178.6800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1774483200",
+    "open": "176.0700",
+    "high": "176.5100",
+    "low": "171.1400",
+    "close": "171.2400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1774569600",
+    "open": "170.0000",
+    "high": "170.9700",
+    "low": "167.0100",
+    "close": "167.5200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1774828800",
+    "open": "168.7800",
+    "high": "169.4500",
+    "low": "164.2700",
+    "close": "165.1700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1774915200",
+    "open": "166.9700",
+    "high": "174.6200",
+    "low": "166.9600",
+    "close": "174.4000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1775001600",
+    "open": "176.0000",
+    "high": "177.3700",
+    "low": "174.7500",
+    "close": "175.7500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1775088000",
+    "open": "172.1800",
+    "high": "177.4900",
+    "low": "171.3700",
+    "close": "177.3900",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1775433600",
+    "open": "177.1550",
+    "high": "177.7900",
+    "low": "175.7600",
+    "close": "177.6400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1775520000",
+    "open": "175.7250",
+    "high": "178.2300",
+    "low": "173.6600",
+    "close": "178.1000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1775606400",
+    "open": "184.5000",
+    "high": "185.2600",
+    "low": "180.3000",
+    "close": "182.0800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1775692800",
+    "open": "181.8400",
+    "high": "184.0800",
+    "low": "180.6200",
+    "close": "183.9100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1775779200",
+    "open": "184.3100",
+    "high": "190.0000",
+    "low": "184.3000",
+    "close": "188.6300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776038400",
+    "open": "186.0300",
+    "high": "189.6600",
+    "low": "185.7400",
+    "close": "189.3100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776124800",
+    "open": "190.8400",
+    "high": "196.5100",
+    "low": "190.7700",
+    "close": "196.5100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776211200",
+    "open": "196.5400",
+    "high": "200.4000",
+    "low": "195.7400",
+    "close": "198.8700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776297600",
+    "open": "197.4300",
+    "high": "199.8500",
+    "low": "195.8100",
+    "close": "198.3500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776384000",
+    "open": "199.9000",
+    "high": "201.7000",
+    "low": "199.2700",
+    "close": "201.6800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776643200",
+    "open": "199.9800",
+    "high": "202.1700",
+    "low": "197.8397",
+    "close": "202.0600",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776729600",
+    "open": "202.1300",
+    "high": "202.7500",
+    "low": "199.0000",
+    "close": "199.8800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776816000",
+    "open": "200.9900",
+    "high": "202.5000",
+    "low": "199.0000",
+    "close": "202.5000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776902400",
+    "open": "202.4600",
+    "high": "203.8290",
+    "low": "197.2206",
+    "close": "199.6400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1776988800",
+    "open": "199.9600",
+    "high": "210.9500",
+    "low": "199.8100",
+    "close": "208.2700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1777248000",
+    "open": "209.6450",
+    "high": "216.8250",
+    "low": "207.3800",
+    "close": "216.6100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1777334400",
+    "open": "209.4900",
+    "high": "214.7300",
+    "low": "208.2000",
+    "close": "213.1700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1777420800",
+    "open": "212.7000",
+    "high": "212.7200",
+    "low": "207.5758",
+    "close": "209.2500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1777507200",
+    "open": "209.9300",
+    "high": "210.3000",
+    "low": "198.7000",
+    "close": "199.5700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1777593600",
+    "open": "201.2800",
+    "high": "203.0000",
+    "low": "197.1200",
+    "close": "198.4500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1777852800",
+    "open": "199.5000",
+    "high": "201.7300",
+    "low": "194.7400",
+    "close": "198.4800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1777939200",
+    "open": "199.3000",
+    "high": "200.2400",
+    "low": "196.0300",
+    "close": "196.5000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778025600",
+    "open": "199.8900",
+    "high": "208.2650",
+    "low": "198.6100",
+    "close": "207.8300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778112000",
+    "open": "208.3400",
+    "high": "214.2000",
+    "low": "206.5000",
+    "close": "211.5000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778198400",
+    "open": "213.0300",
+    "high": "217.8000",
+    "low": "212.8900",
+    "close": "215.2000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778457600",
+    "open": "214.0350",
+    "high": "222.3000",
+    "low": "213.8900",
+    "close": "219.4400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778544000",
+    "open": "218.5450",
+    "high": "223.7500",
+    "low": "214.9200",
+    "close": "220.7800",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778630400",
+    "open": "224.9300",
+    "high": "227.8400",
+    "low": "221.5653",
+    "close": "225.8300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778716800",
+    "open": "229.8500",
+    "high": "236.5400",
+    "low": "229.3000",
+    "close": "235.7400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1778803200",
+    "open": "229.7600",
+    "high": "231.5000",
+    "low": "224.2400",
+    "close": "225.3200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779062400",
+    "open": "229.8700",
+    "high": "230.0000",
+    "low": "218.3700",
+    "close": "222.3200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779148800",
+    "open": "219.6200",
+    "high": "224.4800",
+    "low": "217.9100",
+    "close": "220.6100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779235200",
+    "open": "223.1800",
+    "high": "226.1300",
+    "low": "220.4950",
+    "close": "223.4700",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779321600",
+    "open": "222.2900",
+    "high": "227.3999",
+    "low": "217.9300",
+    "close": "219.5100",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779408000",
+    "open": "220.9040",
+    "high": "221.0100",
+    "low": "214.8000",
+    "close": "215.3300",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779753600",
+    "open": "216.5400",
+    "high": "218.1800",
+    "low": "212.0000",
+    "close": "214.8600",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779840000",
+    "open": "214.1200",
+    "high": "214.1500",
+    "low": "208.7800",
+    "close": "212.6000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1779926400",
+    "open": "211.2750",
+    "high": "215.5191",
+    "low": "211.2200",
+    "close": "214.2500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1780012800",
+    "open": "214.5750",
+    "high": "217.8599",
+    "low": "211.1300",
+    "close": "211.1400",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1780272000",
+    "open": "215.7300",
+    "high": "224.8700",
+    "low": "215.7000",
+    "close": "224.3600",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1780358400",
+    "open": "227.1800",
+    "high": "232.2800",
+    "low": "221.3500",
+    "close": "222.8200",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1780444800",
+    "open": "221.7200",
+    "high": "222.8200",
+    "low": "214.5100",
+    "close": "214.7500",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1780531200",
+    "open": "213.9050",
+    "high": "221.6000",
+    "low": "210.9700",
+    "close": "218.6600",
+    "fake": "false"
+  }
+]

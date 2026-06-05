@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>QuantOracle | Test Chart</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        .field-label-inline { font-weight: 600; margin-bottom: 4px; font-size: 0.85rem; color: #555; }
+    </style>
+</head>
+<body class="has-background-light">
+
+    <nav class="navbar is-dark">
+        <div class="container">
+            <div class="navbar-brand">
+                <span class="navbar-item has-text-white has-text-weight-bold">QuantOracle — Test Chart</span>
+            </div>
+            <div class="navbar-end">
+                <a class="navbar-item has-text-white" href="index.html">← Home</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="section pb-2">
+        <div class="container">
+            <div class="box">
+                <p class="is-size-7 has-text-grey mb-3">
+                    Pulls real daily OHLC data from AlphaVantage (NASDAQ/NYSE). No login required.
+                    Your API key is passed to the server to proxy the request and is <strong>never stored</strong>.
+                </p>
+                <div class="columns is-vcentered">
+                    <div class="column is-narrow">
+                        <div class="field-label-inline">Symbol</div>
+                        <input id="symbolInput" class="input" type="text" placeholder="e.g. NVDA" value="NVDA" style="width:120px">
+                    </div>
+                    <div class="column">
+                        <div class="field-label-inline">AlphaVantage API Key</div>
+                        <input id="apiKeyInput" class="input" type="password" placeholder="Paste your API key here">
+                    </div>
+                    <div class="column is-narrow" style="padding-top:22px">
+                        <button id="pullBtn" class="button is-primary" onclick="pullData()">Pull</button>
+                    </div>
+                </div>
+                <div id="statusMsg" class="is-size-7 has-text-grey mt-1" style="min-height:18px"></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section pt-2">
+        <div class="container">
+            <div class="box p-0 overflow-hidden">
+                <div class="p-4 has-background-white">
+                    <h2 class="title is-5 mb-1" id="chartTitle">Enter a symbol and API key above, then click Pull</h2>
+                    <span class="tag is-info is-light">Daily (1D)</span>
+                </div>
+                <div id="chart" style="height:450px; width:100%;"></div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        let chartInstance = null;
+        let seriesInstance = null;
+
+        function setStatus(msg, colour = 'grey') {
+            const el = document.getElementById('statusMsg');
+            el.textContent = msg;
+            el.style.color = colour;
+        }
+
+        // test.html uses a guest session token — no real auth needed for PULL,
+        // but the endpoint still validates the session param exists.
+        const GUEST_SESSION = 'test-guest';
+
+        async function pullData() {
+            const symbol = document.getElementById('symbolInput').value.trim().toUpperCase();
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+
+            if (!symbol) { setStatus('Enter a symbol.', 'orange'); return; }
+            if (!apiKey)  { setStatus('Enter your AlphaVantage API key.', 'orange'); return; }
+
+            const btn = document.getElementById('pullBtn');
+            btn.classList.add('is-loading');
+            btn.disabled = true;
+            setStatus(`Fetching ${symbol} from AlphaVantage via server…`);
+
+            try {
+                const url = `/api/chart/?session=${GUEST_SESSION}&action=PULL` +
+                            `&index=${encodeURIComponent(symbol)}&time=1D` +
+                            `&api_key=${encodeURIComponent(apiKey)}`;
+                const res = await fetch(url, { method: 'POST' });
+                const text = await res.text();
+                let data;
+                try { data = JSON.parse(text); }
+                catch { throw new Error(`Server returned non-JSON: ${text.slice(0, 120)}`); }
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+
+                // Convert common candle format to LightweightCharts format
+                const candles = data.data.map(d => ({
+                    time:  parseInt(d.candle_close_timestamp, 10),
+                    open:  parseFloat(d.open),
+                    high:  parseFloat(d.high),
+                    low:   parseFloat(d.low),
+                    close: parseFloat(d.close),
+                })).sort((a, b) => a.time - b.time);
+
+                localStorage.setItem('qo_av_key_test', apiKey);
+                renderChart(candles, symbol);
+                setStatus(`Loaded ${candles.length} daily bars for ${symbol}.`, 'green');
+                document.getElementById('chartTitle').textContent = `${symbol} — Daily`;
+
+            } catch (err) {
+                setStatus(`Error: ${err.message}`, 'red');
+            } finally {
+                btn.classList.remove('is-loading');
+                btn.disabled = false;
+            }
+        }
+
+        function renderChart(candles, symbol) {
+            const container = document.getElementById('chart');
+
+            // Destroy previous chart if it exists
+            if (chartInstance) {
+                chartInstance.remove();
+                chartInstance = null;
+                seriesInstance = null;
+            }
+
+            chartInstance = LightweightCharts.createChart(container, {
+                layout: { background: { color: '#ffffff' }, textColor: '#333' },
+                grid:   { vertLines: { visible: false }, horzLines: { color: '#f0f0f0' } },
+                width:  container.clientWidth,
+                height: 450,
+            });
+
+            seriesInstance = chartInstance.addSeries(LightweightCharts.CandlestickSeries, {
+                upColor:        '#48c78e',
+                downColor:      '#f14668',
+                borderUpColor:  '#48c78e',
+                borderDownColor:'#f14668',
+                wickUpColor:    '#48c78e',
+                wickDownColor:  '#f14668',
+            });
+
+            seriesInstance.setData(candles);
+            chartInstance.timeScale().fitContent();
+
+            // Resize on window resize
+            window.addEventListener('resize', () => {
+                if (chartInstance) chartInstance.resize(container.clientWidth, 450);
+            });
+        }
+
+        // Allow Enter key on symbol/apiKey inputs to trigger pull
+        ['symbolInput', 'apiKeyInput'].forEach(id => {
+            document.getElementById(id).addEventListener('keydown', e => {
+                if (e.key === 'Enter') pullData();
+            });
+        });
+
+        // Autoload saved API key — test.html is sessionless so use a shared key
+        const _testKey = localStorage.getItem('qo_av_key_test') || Object.keys(localStorage)
+            .filter(k => k.startsWith('qo_av_key_')).map(k => localStorage.getItem(k))[0] || '';
+        if (_testKey) document.getElementById('apiKeyInput').value = _testKey;
+    </script>
+</body>
+</html>

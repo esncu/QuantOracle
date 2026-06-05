@@ -6,10 +6,11 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        .user-card  { border-left: 4px solid #3273dc; margin-bottom: 1.5rem; }
-        .data-row   { margin: 5px 0 5px 20px; padding: 8px 12px; background: #fff; border: 1px solid #eee; border-radius: 4px; }
-        .flagged-row { background: #fff3cd; border-left: 3px solid #ff6b6b; }
-        .badge      { background: #e8e8e8; padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; margin-left: 8px; }
+        .user-card   { border-left: 4px solid #3273dc; margin-bottom: 1.5rem; }
+        .dash-card   { border-left: 3px solid #aab; margin: 8px 0 8px 16px; padding: 8px 12px; background:#f9f9f9; border-radius:4px; }
+        .data-row    { margin: 4px 0 4px 12px; padding: 6px 10px; background:#fff; border:1px solid #eee; border-radius:4px; }
+        .flagged-row { background:#fff3cd; border-left:3px solid #ff6b6b; }
+        .badge       { background:#e8e8e8; padding:2px 6px; border-radius:3px; font-size:0.8rem; margin-left:6px; }
     </style>
 </head>
 <body class="has-background-light p-5">
@@ -20,20 +21,17 @@
         </div>
     </nav>
 
-    <div class="container" style="max-width: 900px;">
-        <h1 class="title mb-5">Admin Space</h1>
+    <div class="container" style="max-width:960px;">
+        <h1 class="title mb-4">Admin Space</h1>
 
-        <div class="field has-addons mb-5">
+        <div class="field has-addons mb-4">
             <div class="control is-expanded">
-                <input class="input" type="text" id="searchInput" placeholder="Search by username..."
+                <input class="input" type="text" id="searchInput" placeholder="Search by username…"
                     onkeyup="if(event.key==='Enter') render()">
             </div>
-            <div class="control">
-                <button class="button is-info" onclick="render()">Search</button>
-            </div>
+            <div class="control"><button class="button is-info" onclick="render()">Search</button></div>
         </div>
 
-        <!-- Filter toggle -->
         <div class="field mb-4">
             <label class="checkbox">
                 <input type="checkbox" id="showFlaggedOnly" onchange="render()">
@@ -41,119 +39,124 @@
             </label>
         </div>
 
-        <div id="app"><p class="has-text-grey">Loading users...</p></div>
+        <div id="app"><p class="has-text-grey">Loading…</p></div>
     </div>
 
     <script>
         let allUsers = [];
         const session = new URLSearchParams(window.location.search).get('session') || '';
 
-        // ----------------------------------------------------------------
-        // Load
-        // ----------------------------------------------------------------
         async function loadData() {
             try {
-                const res = await fetch(`/admin/users?session=${session}`);
+                const res = await fetch(`/api/admin/users?session=${session}`);
                 if (res.status === 401 || res.status === 403) {
-                    document.getElementById('app').innerHTML =
-                        '<p class="has-text-danger">Access denied. Admin session required.</p>';
+                    document.getElementById('app').innerHTML = '<p class="has-text-danger">Access denied.</p>';
                     return;
                 }
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 allUsers = await res.json();
                 render();
             } catch (err) {
-                document.getElementById('app').innerHTML =
-                    `<p class="has-text-danger">Error loading data: ${err.message}</p>`;
+                document.getElementById('app').innerHTML = `<p class="has-text-danger">Error: ${err.message}</p>`;
             }
         }
 
-        // ----------------------------------------------------------------
-        // Render
-        // ----------------------------------------------------------------
         function render() {
             const query       = document.getElementById('searchInput').value.toLowerCase();
             const flaggedOnly = document.getElementById('showFlaggedOnly').checked;
 
-            let users = allUsers.filter(u => u.name.toLowerCase().includes(query));
-
+            const users = allUsers.filter(u => u.name.toLowerCase().includes(query));
             if (!users.length) {
-                document.getElementById('app').innerHTML =
-                    '<p class="has-text-centered has-text-grey my-6">No users found.</p>';
+                document.getElementById('app').innerHTML = '<p class="has-text-centered has-text-grey my-6">No users found.</p>';
                 return;
             }
 
             document.getElementById('app').innerHTML = users.map(user => {
-                let dataRows = user.data || [];
-                if (flaggedOnly) dataRows = dataRows.filter(d => d.deleted);
+                const dashboards = user.dashboards || [];
 
-                // Skip user card entirely if flaggedOnly and they have nothing flagged
-                if (flaggedOnly && dataRows.length === 0) return '';
+                // Collect all data entries across all dashboards for flaggedOnly filter
+                const allEntries = dashboards.flatMap(d => (d.data || []).map(e => ({...e, dashName: d.name, dashId: d.id})));
+                const flaggedEntries = allEntries.filter(e => e.deleted);
 
-                const flaggedCount = (user.data || []).filter(d => d.deleted).length;
+                if (flaggedOnly && flaggedEntries.length === 0) return '';
+
+                const flaggedCount = flaggedEntries.length;
 
                 return `
                 <div class="box user-card p-4">
                     <div class="is-flex is-justify-content-space-between is-align-items-center mb-3">
-                        <h2 class="subtitle is-5 mb-0">
+                        <div>
                             <strong>User #${user.id}:</strong> ${user.name}
-                            <span class="badge">${(user.data || []).length} entries</span>
+                            <span class="badge">${user.email}</span>
+                            <span class="badge">${dashboards.length} dashboards</span>
                             ${flaggedCount > 0 ? `<span class="badge" style="background:#fff3cd;color:#c0392b">${flaggedCount} flagged</span>` : ''}
-                        </h2>
-                        <button class="button is-danger is-small"
-                            onclick="deleteUser(${user.id}, '${user.name}')">
-                            <i class="fas fa-trash mr-2"></i> Delete User
+                        </div>
+                        <button class="button is-danger is-small" onclick="deleteUser(${user.id},'${user.name}')">
+                            <i class="fas fa-trash mr-1"></i> Delete User
                         </button>
                     </div>
 
-                    ${dataRows.length === 0
-                        ? '<p class="has-text-grey is-size-7 ml-4">No data entries.</p>'
-                        : dataRows.map(d => `
-                            <div class="data-row is-flex is-justify-content-space-between is-align-items-center ${d.deleted ? 'flagged-row' : ''}">
-                                <div>
-                                    <strong>Data #${d.id}:</strong> ${d.symbol_name} — ${d.timeframe}
-                                    ${d.deleted ? '<span class="has-text-danger is-size-7 ml-2"><i class="fas fa-flag"></i> Flagged for deletion</span>' : ''}
+                    ${dashboards.length === 0
+                        ? '<p class="has-text-grey is-size-7 ml-4">No dashboards.</p>'
+                        : dashboards.map(dash => {
+                            let entries = dash.data || [];
+                            if (flaggedOnly) entries = entries.filter(e => e.deleted);
+                            if (flaggedOnly && entries.length === 0) return '';
+
+                            return `<div class="dash-card">
+                                <div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
+                                    <strong>📁 ${dash.name}</strong>
+                                    <span class="badge">${(dash.data||[]).length} entries</span>
                                 </div>
-                                <div class="buttons mb-0">
-                                    ${d.deleted
-                                        ? `<button class="button is-success is-small" onclick="restoreData(${d.id})">
-                                               <i class="fas fa-undo mr-1"></i> Restore
-                                           </button>
-                                           <button class="button is-danger is-small" onclick="deleteData(${d.id}, '${d.symbol_name}', '${d.timeframe}')">
-                                               <i class="fas fa-trash mr-1"></i> Delete
-                                           </button>`
-                                        : `<button class="button is-danger is-small is-outlined" onclick="deleteData(${d.id}, '${d.symbol_name}', '${d.timeframe}')">
-                                               <i class="fas fa-trash"></i>
-                                           </button>`
-                                    }
-                                </div>
-                            </div>
-                        `).join('')
+                                ${entries.length === 0
+                                    ? '<p class="has-text-grey is-size-7">No entries.</p>'
+                                    : entries.map(d => `
+                                        <div class="data-row is-flex is-justify-content-space-between is-align-items-center ${d.deleted ? 'flagged-row' : ''}">
+                                            <div>
+                                                <strong>#${d.id}</strong> ${d.symbol_name} — ${d.timeframe}
+                                                ${d.has_data ? '<span class="tag is-success is-light is-small ml-1">data</span>' : ''}
+                                                ${d.deleted ? '<span class="has-text-danger is-size-7 ml-2"><i class="fas fa-flag"></i> flagged</span>' : ''}
+                                            </div>
+                                            <div class="buttons mb-0" style="gap:4px">
+                                                ${d.deleted
+                                                    ? `<button class="button is-success is-small" 
+                                                        title="Un-flags entry. User must click the red box to re-generate data."
+                                                        onclick="restoreData(${d.id})">
+                                                        <i class="fas fa-undo mr-1"></i>Restore
+                                                    </button>`
+                                                    : ''}
+                                                <button class="button is-danger is-small ${d.deleted ? '' : 'is-outlined'}"
+                                                    onclick="deleteData(${d.id},'${d.symbol_name}','${d.timeframe}')">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </div>`
+                                    ).join('')
+                                }
+                            </div>`;
+                        }).join('')
                     }
                 </div>`;
             }).join('');
         }
 
-        // ----------------------------------------------------------------
-        // Actions
-        // ----------------------------------------------------------------
         async function deleteUser(userId, name) {
             if (!confirm(`Permanently delete user "${name}" and ALL their data?`)) return;
-            const res = await fetch(`/admin/users/${userId}?session=${session}`, { method: 'DELETE' });
+            const res = await fetch(`/api/admin/users/${userId}?session=${session}`, { method: 'DELETE' });
             if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
             loadData();
         }
 
         async function deleteData(dataId, sym, tf) {
-            if (!confirm(`Permanently delete data for ${sym} [${tf}]?`)) return;
-            const res = await fetch(`/admin/data/${dataId}?session=${session}`, { method: 'DELETE' });
+            if (!confirm(`Permanently delete ${sym} [${tf}]?`)) return;
+            const res = await fetch(`/api/admin/data/${dataId}?session=${session}`, { method: 'DELETE' });
             if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
             loadData();
         }
 
         async function restoreData(dataId) {
-            if (!confirm(`Restore this entry (un-flag for deletion)?`)) return;
-            const res = await fetch(`/admin/data/${dataId}/restore?session=${session}`, { method: 'POST' });
+            if (!confirm('Restore this entry?')) return;
+            const res = await fetch(`/api/admin/data/${dataId}/restore?session=${session}`, { method: 'POST' });
             if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
             loadData();
         }

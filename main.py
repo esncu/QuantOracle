@@ -1,37 +1,50 @@
+import json
+import os
+import random
+import smtplib
+import string
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from email.mime.text import MIMEText
+from pathlib import Path
 
 import bcrypt
 import psycopg2
 import requests
-import uuid
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-app = FastAPI()
+# ---------------------------------------------------------------------------
+# Config — swap these out for real values before production
+# ---------------------------------------------------------------------------
+SMTP_HOST     = "smtp.gmail.com"
+SMTP_PORT     = 587
+SMTP_USER     = "your@gmail.com"
+SMTP_PASSWORD = "your_app_password"
+SMTP_FROM     = "QuantOracle <your@gmail.com>"
 
-# All API routes live under /api so the StaticFiles mount at "/" never
-# intercepts them (StaticFiles returns an HTML 404 for unknown paths,
-# which breaks res.json() in the frontend).
+DATA_ROOT = Path("data")   # ./data/{user_id}/{symbol}/{timeframe}.json
+
+SESSION_TTL_MINUTES  = 30   # refreshed on every authenticated action
+RECOVERY_TTL_MINUTES = 30   # one-time OTP window
+
+app = FastAPI()
 api = APIRouter(prefix="/api")
 
-SESSION_TTL_HOURS = 24
 
 # ---------------------------------------------------------------------------
 # DB
 # ---------------------------------------------------------------------------
 
-
 @contextmanager
 def get_conn():
     conn = psycopg2.connect(
-        host="localhost",
-        port=5432,  # matches docker -p 5432:5432
+        host="localhost", port=5432,
         database="stocks",
-        user="postgres",
-        password="qu0cle",
+        user="backend_user", password="user123",
     )
     try:
         yield conn
@@ -40,508 +53,765 @@ def get_conn():
 
 
 # ---------------------------------------------------------------------------
-# Auth helpers
+# Password helpers
 # ---------------------------------------------------------------------------
 
+def _hash(password: str) -> str:
+    return bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt()).decode()
 
-def _safe_bcrypt_hash(password: str) -> str:
-    # Truncate to 72 bytes — bcrypt's hard limit.
-    pw = password.encode()[:72]
-    return bcrypt.hashpw(pw, bcrypt.gensalt()).decode()
-
-
-def _safe_bcrypt_verify(password: str, hashed: str) -> bool:
-    pw = password.encode()[:72]
-    return bcrypt.checkpw(pw, hashed.encode())
+def _verify(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode()[:72], hashed.encode())
 
 
-def register(name: str, password: str) -> None:
-    hashed_password = _safe_bcrypt_hash(password)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
+# ---------------------------------------------------------------------------
+# Session helpers
+# ---------------------------------------------------------------------------
+
+def _new_expiry(minutes: int = SESSION_TTL_MINUTES) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(minutes=minutes)
+
+def _refresh_session(session_id: str, conn=None) -> None:
+    """Push expires_at forward by SESSION_TTL_MINUTES from now."""
+    def _do(c):
+        with c.cursor() as cur:
             cur.execute(
-                "INSERT INTO users (name, pass_hash) VALUES (%s, %s)",
-                (name, hashed_password),
+                "UPDATE session SET expires_at = %s WHERE id = %s",
+                (_new_expiry(), session_id),
             )
-        conn.commit()
+        c.commit()
+    if conn:
+        _do(conn)
+    else:
+        with get_conn() as c:
+            _do(c)
 
-
-def login(name: str, password: str) -> str | None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, pass_hash FROM users WHERE name = %s", (name,))
-            result = cur.fetchone()
-            if not result or not _safe_bcrypt_verify(password, result[1]):
-                return None
-
-            user_id = result[0]
-            session_id = str(uuid.uuid4())
-            expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
-            cur.execute(
-                "INSERT INTO session (id, user_id, expires_at) VALUES (%s, %s, %s)",
-                (session_id, user_id, expires_at),
-            )
-        conn.commit()
-    return session_id
-
-
-def admin_login(name: str, password: str) -> str | None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # Query the standalone admin table
-            cur.execute("SELECT id, pass_hash FROM admin WHERE name = %s", (name,))
-            result = cur.fetchone()
-            # Plain-text password verification per init.sql seeding configuration
-            if not result or result[1] != password:
-                return None
-
-            admin_id = result[0]
-            session_id = str(uuid.uuid4())
-            expires_at = datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)
-
-            # Reusing the session table by mapping admin_id into the session context.
-            # Note: Ensure foreign key constraints in your schema match this usage pattern.
-            cur.execute(
-                "INSERT INTO session (id, user_id, expires_at) VALUES (%s, %s, %s)",
-                (session_id, admin_id, expires_at),
-            )
-        conn.commit()
-    return session_id
-
-
-def validate_session(session_id: str) -> int:
-    """Return user_id for a valid non-expired session, or raise 401."""
+def validate_session(session_id: str, refresh: bool = True) -> int:
+    """Return user_id (positive) for a valid NORMAL user session."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT user_id FROM session WHERE id = %s AND expires_at > %s",
+                "SELECT user_id, type FROM session WHERE id = %s AND expires_at > %s",
                 (session_id, datetime.now(timezone.utc)),
             )
             row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
-    return row[0]
+        if not row:
+            raise HTTPException(401, "Invalid or expired session")
+        user_id, stype = row
+        if user_id < 0:
+            raise HTTPException(403, "Admin session cannot access user endpoints")
+        if stype != "NORMAL":
+            raise HTTPException(403, "Invalid session type")
+        if refresh:
+            _refresh_session(session_id, conn)
+    return user_id
 
-
-def validate_admin_session(session_id: str) -> int:
-    """Verifies that the session belongs to a valid account inside the admin table."""
-    admin_id = validate_session(session_id)
+def validate_admin_session(session_id: str, refresh: bool = True) -> int:
+    """Return admin_id for a valid admin session."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Check the standalone admin table to verify identity
-            cur.execute("SELECT id FROM admin WHERE id = %s", (admin_id,))
+            cur.execute(
+                "SELECT user_id, type FROM session WHERE id = %s AND expires_at > %s",
+                (session_id, datetime.now(timezone.utc)),
+            )
             row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=403, detail="Admin access required")
+        if not row:
+            raise HTTPException(401, "Invalid or expired session")
+        user_id, stype = row
+        if user_id >= 0:
+            raise HTTPException(403, "Admin access required")
+        if stype != "NORMAL":
+            raise HTTPException(403, "Invalid session type")
+        admin_id = -user_id
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM admin WHERE id = %s", (admin_id,))
+            if not cur.fetchone():
+                raise HTTPException(403, "Admin access required")
+        if refresh:
+            _refresh_session(session_id, conn)
     return admin_id
 
 
 # ---------------------------------------------------------------------------
-# API-key / upstream data helpers
+# Email
 # ---------------------------------------------------------------------------
 
+def send_email(to: str, subject: str, body: str) -> None:
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_FROM
+    msg["To"]      = to
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASSWORD)
+            s.sendmail(SMTP_FROM, [to], msg.as_string())
+    except Exception as e:
+        # During development, just print — swap for real error handling in prod
+        print(f"[EMAIL STUB] To: {to} | Subject: {subject}\n{body}\n(send failed: {e})")
 
-def get_api_key() -> str:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT api_key FROM settings LIMIT 1")
-            row = cur.fetchone()
-    return row[0] if row else ""
 
+# ---------------------------------------------------------------------------
+# AlphaVantage helper
+# ---------------------------------------------------------------------------
 
-def fetch_stock_data(symbol: str) -> dict:
-    api_key = get_api_key()
+# AlphaVantage function + response key per timeframe
+_AV_CONFIG = {
+    "5M":  ("TIME_SERIES_INTRADAY", "Time Series (5min)",  "&interval=5min"),
+    "1H":  ("TIME_SERIES_INTRADAY", "Time Series (60min)", "&interval=60min"),
+    "1D":  ("TIME_SERIES_DAILY",    "Time Series (Daily)", ""),
+    "1W":  ("TIME_SERIES_WEEKLY",   "Weekly Time Series",  ""),
+}
+
+def fetch_av(symbol: str, timeframe: str, api_key: str) -> dict:
+    """Fetch compact OHLC data from AlphaVantage for any supported timeframe."""
+    cfg = _AV_CONFIG.get(timeframe)
+    if not cfg:
+        raise ValueError(f"Unsupported timeframe: {timeframe}")
+    function, series_key, extra_params = cfg
     url = (
         "https://www.alphavantage.co/query"
-        f"?function=TIME_SERIES_DAILY&symbol={symbol}&outputsize=full&apikey={api_key}"
+        f"?function={function}&symbol={symbol}"
+        f"&outputsize=compact&apikey={api_key}{extra_params}"
     )
-    return requests.get(url).json()
+    raw = requests.get(url, timeout=15).json()
+    if raw.get("Note"):          raise ValueError(f"API rate limit: {raw['Note']}")
+    if raw.get("Information"):   raise ValueError(raw["Information"])
+    if raw.get("Error Message"): raise ValueError(raw["Error Message"])
+    series = raw.get(series_key, {})
+    if not series:
+        raise ValueError(f"No data returned for {symbol} [{timeframe}] — check symbol and API key")
+    return series
 
 
-def rows_to_candles(rows) -> list[dict]:
-    """Convert DB candle rows (ts, open, high, low, close, fake) to API format."""
-    return [
-        {
-            "candle_close_timestamp": str(r[0]),
-            "open": str(r[1]),
-            "high": str(r[2]),
-            "low": str(r[3]),
-            "close": str(r[4]),
-            "fake": "true" if r[5] else "false",
-        }
-        for r in rows
-    ]
+def series_to_candles(series: dict) -> list[dict]:
+    """Convert AV series dict to candle list. Handles both daily and intraday keys."""
+    candles = []
+    for date_str, ohlc in sorted(series.items()):
+        # Daily/weekly:  "2026-06-05"
+        # Intraday:      "2026-06-05 09:30:00"
+        fmt = "%Y-%m-%d %H:%M:%S" if " " in date_str else "%Y-%m-%d"
+        ts = int(
+            datetime.strptime(date_str, fmt)
+            .replace(tzinfo=timezone.utc)
+            .timestamp()
+        )
+        candles.append({
+            "candle_close_timestamp": str(ts),
+            "open":  ohlc["1. open"],
+            "high":  ohlc["2. high"],
+            "low":   ohlc["3. low"],
+            "close": ohlc["4. close"],
+            "fake":  "false",
+        })
+    return candles
 
 
 # ---------------------------------------------------------------------------
-# Request models
+# File storage helpers
+# data_path: data/{user_id}/{SYMBOL}/{timeframe}.json
+# pred_path: data/{user_id}/{SYMBOL}/{timeframe}_preds.json  (ML, future)
 # ---------------------------------------------------------------------------
 
+def data_path(user_id: int, symbol: str, timeframe: str) -> Path:
+    return DATA_ROOT / str(user_id) / symbol / f"{timeframe}.json"
+
+def write_candles(user_id: int, symbol: str, timeframe: str, candles: list[dict]) -> Path:
+    p = data_path(user_id, symbol, timeframe)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(candles, indent=2))
+    return p
+
+def read_candles(path: str | Path) -> list[dict] | None:
+    p = Path(path)
+    if not p.exists():
+        return None
+    return json.loads(p.read_text())
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
 
 class UserAuth(BaseModel):
     username: str
     password: str
+    email: str | None = None   # required for register, ignored on login
+
+class RecoveryRequest(BaseModel):
+    email: str
+
+class RecoveryConfirm(BaseModel):
+    session_id: str
+    otp: str
+    new_password: str
 
 
 # ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
 
-
 @api.post("/register")
 def api_register(auth: UserAuth):
+    if not auth.email:
+        raise HTTPException(400, "email is required for registration")
     try:
-        register(auth.username, auth.password)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (email, name, pass_hash) VALUES (%s, %s, %s)",
+                    (auth.email.lower().strip(), auth.username.strip(), _hash(auth.password)),
+                )
+            conn.commit()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"status": "success", "message": "User successfully registered"}
+        raise HTTPException(400, str(exc))
+    return {"status": "success", "message": "Registered successfully"}
 
 
 @api.post("/login")
 def api_login(auth: UserAuth):
-    session_id = login(auth.username, auth.password)
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-    return {"status": "success", "session_id": session_id}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, pass_hash FROM users WHERE name = %s", (auth.username,))
+            row = cur.fetchone()
+        if not row or not _verify(auth.password, row[1]):
+            raise HTTPException(401, "Invalid username or password")
+        sid = str(uuid.uuid4())
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO session (id, user_id, type, expires_at) VALUES (%s, %s, 'NORMAL', %s)",
+                (sid, row[0], _new_expiry()),
+            )
+        conn.commit()
+    return {"status": "success", "session_id": sid}
 
 
 @api.post("/admin/login")
 def api_admin_login(auth: UserAuth):
-    session_id = admin_login(auth.username, auth.password)
-    if not session_id:
-        raise HTTPException(
-            status_code=401, detail="Invalid admin username or password"
-        )
-    return {"status": "success", "session_id": session_id}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, pass_hash FROM admin WHERE name = %s", (auth.username,))
+            row = cur.fetchone()
+        if not row or not _verify(auth.password, row[1]):
+            raise HTTPException(401, "Invalid admin credentials")
+        sid = str(uuid.uuid4())
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO session (id, user_id, type, expires_at) VALUES (%s, %s, 'NORMAL', %s)",
+                (sid, -row[0], _new_expiry()),
+            )
+        conn.commit()
+    return {"status": "success", "session_id": sid}
+
+
+@api.post("/recover/request")
+def api_recover_request(body: RecoveryRequest):
+    """Send a 6-digit OTP to the user's email and create a RECOVERY session."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s", (body.email.lower().strip(),))
+            row = cur.fetchone()
+        if not row:
+            # Don't reveal whether email exists
+            return {"status": "success", "message": "If that email exists, a code was sent"}
+        user_id = row[0]
+        otp = "".join(random.choices(string.digits, k=6))
+        sid = str(uuid.uuid4())
+        with conn.cursor() as cur:
+            # Store OTP in session id field hack — we store otp in a separate column
+            # For simplicity: encode otp into the session row via a dedicated table later;
+            # for now store as "otp:{code}" in type field with RECOVERY prefix
+            cur.execute(
+                "INSERT INTO session (id, user_id, type, expires_at) VALUES (%s, %s, %s, %s)",
+                (sid, user_id, f"RECOVERY:{otp}", _new_expiry(RECOVERY_TTL_MINUTES)),
+            )
+        conn.commit()
+    print(f"[RECOVERY OTP] user_id={user_id} email={body.email} otp={otp} session={sid}")
+    send_email(
+        body.email,
+        "QuantOracle — Password Recovery",
+        f"Your one-time recovery code is: {otp}\n\nIt expires in {RECOVERY_TTL_MINUTES} minutes.",
+    )
+    return {"status": "success", "message": "If that email exists, a code was sent", "session_id": sid}
+
+
+@api.post("/recover/confirm")
+def api_recover_confirm(body: RecoveryConfirm):
+    """Validate OTP and set new password."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id, type FROM session WHERE id = %s AND expires_at > %s",
+                (body.session_id, datetime.now(timezone.utc)),
+            )
+            row = cur.fetchone()
+        if not row:
+            raise HTTPException(401, "Recovery session invalid or expired")
+        user_id, stype = row
+        if not stype.startswith("RECOVERY:"):
+            raise HTTPException(403, "Not a recovery session")
+        expected_otp = stype.split(":", 1)[1]
+        if body.otp != expected_otp:
+            raise HTTPException(401, "Invalid recovery code")
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET pass_hash = %s WHERE id = %s",
+                (_hash(body.new_password), user_id),
+            )
+            cur.execute("DELETE FROM session WHERE id = %s", (body.session_id,))
+        conn.commit()
+    return {"status": "success", "message": "Password updated"}
 
 
 # ---------------------------------------------------------------------------
-# Dashboard  —  POST /dashboard?session=…&action=…&index=…&time=…
+# Dashboard endpoints
+# POST /api/dashboard/?session=…&action=…
 #
-#   GET       – all dashboard entries for this user (non-deleted)
-#   GENERATE  – add a new entry (index+time) to user's dashboard + data table
-#   TMPDELETE – user flags (index+time) for deletion  →  is_deleted=TRUE
-#   RESTORE   – admin un-flags (index+time)           →  is_deleted=FALSE
-#   DELETE    – admin hard-deletes the data row (cascade removes candles too)
+# Actions:
+#   GET              — list all dashboards with their data entries + green/red status
+#   CREATE           — create a new named dashboard
+#   RENAME           — rename a dashboard  (requires: dash_id, name)
+#   DELETE_DASH      — admin hard-delete a dashboard
+#   TMPDELETE_DASH   — user flags a dashboard for deletion
+#
+#   GENERATE  — add symbol+timeframe to a dashboard, pull AV data, store file
+#   REGEN     — re-pull AV data for an existing data entry, overwrite file
+#   TMPDELETE — user flags a data entry for deletion
+#   RESTORE   — admin un-flags a data entry
+#   DELETE    — admin hard-deletes a data entry
 # ---------------------------------------------------------------------------
-
 
 @api.post("/dashboard/")
-def dashboard(
-    session: str,
-    action: str,
-    index: str | None = None,
-    time: str | None = None,
+def dashboard_ep(
+    session:  str,
+    action:   str,
+    dash_id:  int | None = None,
+    name:     str | None = None,
+    index:    str | None = None,
+    time:     str | None = None,
+    api_key:  str | None = None,
 ):
     user_id = validate_session(session)
 
+    # ---- GET ---------------------------------------------------------------
     if action == "GET":
-        # Return all non-deleted dashboard entries for this user,
-        # shaped as { data: [ { idx_name, 5M, 1H, 1D, 1W }, ... ] }
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    SELECT symbol_name, timeframe
-                    FROM dashboard
-                    WHERE user_id = %s AND is_deleted = FALSE
-                    ORDER BY symbol_name, timeframe
-                    """,
+                    "SELECT id, name, delete_set FROM dashboard WHERE user_id = %s ORDER BY id",
                     (user_id,),
                 )
-                rows = cur.fetchall()
+                dashboards = cur.fetchall()
+                result = []
+                for did, dname, ddel in dashboards:
+                    cur.execute(
+                        """
+                        SELECT id, symbol_name, timeframe, data_path, delete_set
+                        FROM data WHERE dashboard_id = %s ORDER BY symbol_name, timeframe
+                        """,
+                        (did,),
+                    )
+                    entries = cur.fetchall()
+                    # Build per-symbol timeframe map
+                    symbols: dict[str, dict] = {}
+                    for eid, sym, tf, dpath, edel in entries:
+                        if edel:
+                            continue   # hide flagged entries from user view
+                        if sym not in symbols:
+                            symbols[sym] = {
+                                "5M": {"id": None, "ready": False, "deleted": False},
+                                "1H": {"id": None, "ready": False, "deleted": False},
+                                "1D": {"id": None, "ready": False, "deleted": False},
+                                "1W": {"id": None, "ready": False, "deleted": False},
+                            }
+                        if tf in symbols[sym]:
+                            symbols[sym][tf] = {
+                                "id":      eid,
+                                "ready":   bool(dpath and Path(dpath).exists()),
+                                "deleted": edel,
+                            }
+                    result.append({
+                        "id":       did,
+                        "name":     dname,
+                        "deleted":  ddel,
+                        "symbols":  symbols,
+                    })
+        return {"status": "success", "data": result}
 
-        # Pivot into per-symbol dicts
-        symbols: dict[str, dict] = {}
-        for sym, tf in rows:
-            if sym not in symbols:
-                symbols[sym] = {
-                    "idx_name": sym,
-                    "5M": False,
-                    "1H": False,
-                    "1D": False,
-                    "1W": False,
-                }
-            if tf in symbols[sym]:
-                symbols[sym][tf] = True
-
-        return {"status": "success", "data": list(symbols.values())}
-
-    if action == "GENERATE":
-        if not index or not time:
-            raise HTTPException(status_code=400, detail="index and time are required")
+    # ---- CREATE ------------------------------------------------------------
+    if action == "CREATE":
+        if not name:
+            raise HTTPException(400, "name is required")
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # Insert into data table (model/data paths are placeholders until training runs)
+                cur.execute(
+                    "INSERT INTO dashboard (user_id, name) VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING id",
+                    (user_id, name),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if not row:
+            raise HTTPException(409, f"Dashboard '{name}' already exists")
+        return {"status": "success", "id": row[0], "name": name}
+
+    # ---- RENAME ------------------------------------------------------------
+    if action == "RENAME":
+        if not dash_id or not name:
+            raise HTTPException(400, "dash_id and name are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE dashboard SET name = %s WHERE id = %s AND user_id = %s",
+                    (name, dash_id, user_id),
+                )
+            conn.commit()
+        return {"status": "success"}
+
+    # ---- GENERATE ----------------------------------------------------------
+    if action == "GENERATE":
+        if not dash_id or not index or not time:
+            raise HTTPException(400, "dash_id, index and time are required")
+        # Verify dashboard belongs to user
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM dashboard WHERE id = %s AND user_id = %s",
+                    (dash_id, user_id),
+                )
+                if not cur.fetchone():
+                    raise HTTPException(404, "Dashboard not found")
+
+        # Pull AV data if key provided
+        candles = None
+        fpath = None
+        if api_key:
+            try:
+                series  = fetch_av(index.upper(), time or "1D", api_key)
+                candles = series_to_candles(series)
+                fpath   = write_candles(user_id, index.upper(), time, candles)
+            except ValueError as exc:
+                raise HTTPException(502, str(exc))
+            except Exception as exc:
+                raise HTTPException(502, f"Upstream error: {exc}")
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO data (user_id, symbol_name, timeframe, model_path, data_path)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT DO NOTHING
+                    INSERT INTO data (dashboard_id, symbol_name, timeframe, data_path)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (dashboard_id, symbol_name, timeframe)
+                    DO UPDATE SET
+                        data_path  = COALESCE(EXCLUDED.data_path, data.data_path),
+                        delete_set = FALSE
                     RETURNING id
                     """,
-                    (
-                        user_id,
-                        index,
-                        time,
-                        f"models/{user_id}/{index}_{time}.pkl",
-                        f"data/{user_id}/{index}_{time}.json",
-                    ),
-                )
-                # Also ensure dashboard row exists
-                cur.execute(
-                    """
-                    INSERT INTO dashboard (user_id, symbol_name, timeframe)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT DO NOTHING
-                    """,
-                    (user_id, index, time),
-                )
-            conn.commit()
-        return {
-            "status": "success",
-            "message": f"New model generated for {index} [{time}]",
-        }
-
-    if action == "TMPDELETE":
-        if not index or not time:
-            raise HTTPException(status_code=400, detail="index and time are required")
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE dashboard SET is_deleted = TRUE
-                    WHERE user_id = %s AND symbol_name = %s AND timeframe = %s
-                    """,
-                    (user_id, index, time),
-                )
-                cur.execute(
-                    """
-                    UPDATE data SET is_deleted = TRUE
-                    WHERE user_id = %s AND symbol_name = %s AND timeframe = %s
-                    """,
-                    (user_id, index, time),
-                )
-            conn.commit()
-        return {
-            "status": "success",
-            "message": f"{index} [{time}] flagged for deletion",
-        }
-
-    if action == "RESTORE":
-        validate_admin_session(session)
-        if not index or not time:
-            raise HTTPException(status_code=400, detail="index and time are required")
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE dashboard SET is_deleted = FALSE
-                    WHERE symbol_name = %s AND timeframe = %s
-                    """,
-                    (index, time),
-                )
-                cur.execute(
-                    """
-                    UPDATE data SET is_deleted = FALSE
-                    WHERE symbol_name = %s AND timeframe = %s
-                    """,
-                    (index, time),
-                )
-            conn.commit()
-        return {"status": "success", "message": f"{index} [{time}] restored"}
-
-    if action == "DELETE":
-        validate_admin_session(session)
-        if not index or not time:
-            raise HTTPException(status_code=400, detail="index and time are required")
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                # Cascade on data deletes candles too
-                cur.execute(
-                    "DELETE FROM data WHERE symbol_name = %s AND timeframe = %s",
-                    (index, time),
-                )
-                cur.execute(
-                    "DELETE FROM dashboard WHERE symbol_name = %s AND timeframe = %s",
-                    (index, time),
-                )
-            conn.commit()
-        return {"status": "success", "message": f"{index} [{time}] permanently deleted"}
-
-    raise HTTPException(status_code=400, detail=f"Unknown dashboard action: {action!r}")
-
-
-# ---------------------------------------------------------------------------
-# Chart  —  POST /chart?session=…&action=…&index=…&time=…
-#
-#   GET   – return candle rows (historical + forecast) from DB for index+time
-#   REGEN – re-fetch upstream, replace candles in DB, return fresh dataset
-# ---------------------------------------------------------------------------
-
-
-@api.post("/chart/")
-def chart(
-    session: str,
-    action: str,
-    index: str | None = None,
-    time: str | None = None,
-):
-    user_id = validate_session(session)
-
-    if not index or not time:
-        raise HTTPException(status_code=400, detail="index and time are required")
-
-    if action == "GET":
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT c.candle_close_timestamp, c.open, c.high, c.low, c.close, c.fake
-                    FROM candles c
-                    JOIN data d ON d.id = c.data_id
-                    WHERE d.user_id = %s AND d.symbol_name = %s AND d.timeframe = %s
-                    ORDER BY c.candle_close_timestamp
-                    """,
-                    (user_id, index, time),
-                )
-                rows = cur.fetchall()
-        if not rows:
-            raise HTTPException(status_code=404, detail=f"No data for {index} [{time}]")
-        return {"status": "success", "data": rows_to_candles(rows)}
-
-    if action == "REGEN":
-        # Pull fresh data from upstream, wipe old candles, store new ones
-        try:
-            raw = fetch_stock_data(index)
-            series = raw.get("Time Series (Daily)", {})
-            if not series:
-                raise ValueError("Empty series from upstream")
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Upstream data error: {exc}")
-
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id FROM data WHERE user_id = %s AND symbol_name = %s AND timeframe = %s",
-                    (user_id, index, time),
+                    (dash_id, index.upper(), time, str(fpath) if fpath else None),
                 )
                 row = cur.fetchone()
                 if not row:
-                    raise HTTPException(
-                        status_code=404, detail=f"No data entry for {index} [{time}]"
+                    # Shouldn't happen, but fall back to a SELECT
+                    cur.execute(
+                        "SELECT id FROM data WHERE dashboard_id=%s AND symbol_name=%s AND timeframe=%s",
+                        (dash_id, index.upper(), time),
                     )
+                    row = cur.fetchone()
                 data_id = row[0]
-
-                cur.execute("DELETE FROM candles WHERE data_id = %s", (data_id,))
-
-                candle_rows = []
-                for date_str, ohlc in sorted(series.items()):
-                    ts = int(
-                        datetime.strptime(date_str, "%Y-%m-%d")
-                        .replace(tzinfo=timezone.utc)
-                        .timestamp()
-                    )
-                    candle_rows.append(
-                        (
-                            data_id,
-                            ts,
-                            ohlc["1. open"],
-                            ohlc["2. high"],
-                            ohlc["3. low"],
-                            ohlc["4. close"],
-                            False,
-                        )
-                    )
-
-                cur.executemany(
-                    """
-                    INSERT INTO candles
-                        (data_id, candle_close_timestamp, open, high, low, close, fake)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    candle_rows,
-                )
             conn.commit()
 
-        # Re-fetch to return consistent shape
+        return {
+            "status": "success",
+            "data_id": data_id,
+            "ready": candles is not None,
+            "data": {"data": candles, "forecast": []} if candles else None,
+        }
+
+    # ---- REGEN -------------------------------------------------------------
+    if action == "REGEN":
+        if not dash_id or not index or not time:
+            raise HTTPException(400, "dash_id, index and time are required")
+        if not api_key:
+            raise HTTPException(400, "api_key is required for REGEN")
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT candle_close_timestamp, open, high, low, close, fake
-                    FROM candles WHERE data_id = %s
-                    ORDER BY candle_close_timestamp
+                    SELECT d.id FROM data d
+                    JOIN dashboard db ON db.id = d.dashboard_id
+                    WHERE d.dashboard_id = %s AND d.symbol_name = %s AND d.timeframe = %s
+                      AND db.user_id = %s
                     """,
-                    (data_id,),
+                    (dash_id, index.upper(), time, user_id),
                 )
-                rows = cur.fetchall()
+                row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, f"No entry for {index} [{time}] in that dashboard")
+        try:
+            series  = fetch_av(index.upper(), time or "1D", api_key)
+            candles = series_to_candles(series)
+            fpath   = write_candles(user_id, index.upper(), time, candles)
+        except ValueError as exc:
+            raise HTTPException(502, str(exc))
+        except Exception as exc:
+            raise HTTPException(502, f"Upstream error: {exc}")
 
-        return {
-            "status": "success",
-            "message": f"Model for {index} [{time}] retrained",
-            "data": rows_to_candles(rows),
-        }
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE data SET data_path = %s WHERE id = %s",
+                    (str(fpath), row[0]),
+                )
+            conn.commit()
+        return {"status": "success", "data": {"data": candles, "forecast": []}}
 
-    raise HTTPException(status_code=400, detail=f"Unknown chart action: {action!r}")
+    # ---- TMPDELETE (data entry) --------------------------------------------
+    if action == "TMPDELETE":
+        if not dash_id or not index or not time:
+            raise HTTPException(400, "dash_id, index and time are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE data SET delete_set = TRUE
+                    FROM dashboard db
+                    WHERE data.dashboard_id = db.id
+                      AND db.id = %s AND db.user_id = %s
+                      AND data.symbol_name = %s AND data.timeframe = %s
+                    """,
+                    (dash_id, user_id, index.upper(), time),
+                )
+            conn.commit()
+        return {"status": "success"}
+
+    # ---- TMPDELETE_DASH (flag whole dashboard) ------------------------------
+    if action == "TMPDELETE_DASH":
+        if not dash_id:
+            raise HTTPException(400, "dash_id is required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE dashboard SET delete_set = TRUE WHERE id = %s AND user_id = %s",
+                    (dash_id, user_id),
+                )
+            conn.commit()
+        return {"status": "success"}
+
+    # ---- RESTORE (admin) ---------------------------------------------------
+    if action == "RESTORE":
+        validate_admin_session(session)
+        if not dash_id or not index or not time:
+            raise HTTPException(400, "dash_id, index and time are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE data SET delete_set = FALSE WHERE dashboard_id = %s AND symbol_name = %s AND timeframe = %s",
+                    (dash_id, index.upper(), time),
+                )
+            conn.commit()
+        return {"status": "success"}
+
+    # ---- DELETE (admin, data entry) ----------------------------------------
+    if action == "DELETE":
+        validate_admin_session(session)
+        if not dash_id or not index or not time:
+            raise HTTPException(400, "dash_id, index and time are required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM data WHERE dashboard_id = %s AND symbol_name = %s AND timeframe = %s",
+                    (dash_id, index.upper(), time),
+                )
+            conn.commit()
+        return {"status": "success"}
+
+    # ---- DELETE_DASH (admin, whole dashboard) --------------------------------
+    if action == "DELETE_DASH":
+        validate_admin_session(session)
+        if not dash_id:
+            raise HTTPException(400, "dash_id is required")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM dashboard WHERE id = %s", (dash_id,))
+            conn.commit()
+        return {"status": "success"}
+
+    raise HTTPException(400, f"Unknown dashboard action: {action!r}")
 
 
 # ---------------------------------------------------------------------------
-# Admin endpoints  —  all require role='admin' session
+# Chart endpoint
+# POST /api/chart/?session=…&action=…&index=…&time=…&dash_id=…&api_key=…
 #
-#   GET  /admin/users                     – all users with their data rows
-#   DELETE /admin/users/{user_id}         – delete user (cascades everything)
-#   DELETE /admin/data/{data_id}          – hard-delete one data+candle entry
-#   POST   /admin/data/{data_id}/restore  – un-flag is_deleted on data+dashboard
+#   GET   — read stored file → return {data:[...], forecast:[]}
+#   REGEN — re-pull AV, overwrite file, return fresh data
+#   PULL  — sessionless proxy, key supplied by caller, nothing stored
 # ---------------------------------------------------------------------------
 
+@api.post("/chart/")
+def chart_ep(
+    session:  str,
+    action:   str,
+    index:    str | None = None,
+    time:     str | None = None,
+    dash_id:  int | None = None,
+    api_key:  str | None = None,
+):
+    # PULL is sessionless
+    if action == "PULL":
+        if not index:
+            raise HTTPException(400, "index is required")
+        if not api_key:
+            raise HTTPException(400, "api_key is required for PULL")
+        pull_time = time or "1D"
+        try:
+            series  = fetch_av(index.upper(), pull_time, api_key)
+            candles = series_to_candles(series)
+        except ValueError as exc:
+            raise HTTPException(502, str(exc))
+        except Exception as exc:
+            raise HTTPException(502, f"Upstream error: {exc}")
+        return {"status": "success", "data": {"data": candles, "forecast": []}}
+
+    user_id = validate_session(session)
+
+    if not index or not time:
+        raise HTTPException(400, "index and time are required")
+
+    # Resolve data row — dash_id optional (takes first match if omitted)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if dash_id:
+                cur.execute(
+                    """
+                    SELECT d.id, d.data_path FROM data d
+                    JOIN dashboard db ON db.id = d.dashboard_id
+                    WHERE d.dashboard_id = %s AND d.symbol_name = %s
+                      AND d.timeframe = %s AND db.user_id = %s
+                    """,
+                    (dash_id, index.upper(), time, user_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT d.id, d.data_path FROM data d
+                    JOIN dashboard db ON db.id = d.dashboard_id
+                    WHERE d.symbol_name = %s AND d.timeframe = %s AND db.user_id = %s
+                    ORDER BY d.id LIMIT 1
+                    """,
+                    (index.upper(), time, user_id),
+                )
+            row = cur.fetchone()
+
+    # ---- GET ---------------------------------------------------------------
+    if action == "GET":
+        if row and row[1]:
+            candles = read_candles(row[1])
+            if candles:
+                return {"status": "success", "data": {"data": candles, "forecast": []}}
+
+        # No file — try fetching from AV if key provided
+        key = api_key
+        if key:
+            try:
+                series  = fetch_av(index.upper(), time or "1D", key)
+                candles = series_to_candles(series)
+                fpath   = write_candles(user_id, index.upper(), time, candles)
+                # Update data_path in DB
+                if row:
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE data SET data_path = %s WHERE id = %s",
+                                (str(fpath), row[0]),
+                            )
+                        conn.commit()
+                return {"status": "success", "data": {"data": candles, "forecast": []}}
+            except ValueError as exc:
+                raise HTTPException(502, str(exc))
+            except Exception:
+                pass  # fall through to tempdata
+
+        # Final fallback — tempdata.txt
+        tempdata = Path("tempdata.txt")
+        if tempdata.exists():
+            return {"status": "success", "data": {"data": json.loads(tempdata.read_text()), "forecast": []}}
+        raise HTTPException(404, f"No data for {index} [{time}] and no API key provided")
+
+    # ---- REGEN -------------------------------------------------------------
+    if action == "REGEN":
+        if not api_key:
+            raise HTTPException(400, "api_key is required for REGEN")
+        if not row:
+            raise HTTPException(404, f"No data entry for {index} [{time}]")
+        try:
+            series  = fetch_av(index.upper(), time or "1D", api_key)
+            candles = series_to_candles(series)
+            fpath   = write_candles(user_id, index.upper(), time, candles)
+        except ValueError as exc:
+            raise HTTPException(502, str(exc))
+        except Exception as exc:
+            raise HTTPException(502, f"Upstream error: {exc}")
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE data SET data_path = %s WHERE id = %s",
+                    (str(fpath), row[0]),
+                )
+            conn.commit()
+        return {"status": "success", "data": {"data": candles, "forecast": []}}
+
+    raise HTTPException(400, f"Unknown chart action: {action!r}")
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints
+# ---------------------------------------------------------------------------
 
 @api.get("/admin/users")
 def admin_list_users(session: str):
     validate_admin_session(session)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, name, role, created_at FROM users ORDER BY id")
+            cur.execute("SELECT id, email, name, created_at FROM users ORDER BY id")
             users = cur.fetchall()
             result = []
-            for uid, name, role, created in users:
+            for uid, email, name, created in users:
                 cur.execute(
                     """
-                    SELECT id, symbol_name, timeframe, is_deleted, created_at
-                    FROM data WHERE user_id = %s ORDER BY id
+                    SELECT d.id, d.name, da.id, da.symbol_name, da.timeframe,
+                           da.data_path, da.delete_set
+                    FROM dashboard d
+                    JOIN data da ON da.dashboard_id = d.id
+                    WHERE d.user_id = %s
+                    ORDER BY d.id, da.symbol_name, da.timeframe
                     """,
                     (uid,),
                 )
-                data_rows = cur.fetchall()
-                result.append(
-                    {
-                        "id": uid,
-                        "name": name,
-                        "role": role,
-                        "created_at": created.isoformat(),
-                        "data": [
-                            {
-                                "id": d[0],
-                                "symbol_name": d[1],
-                                "timeframe": d[2],
-                                "deleted": d[3],
-                                "created_at": d[4].isoformat(),
-                            }
-                            for d in data_rows
-                        ],
-                    }
-                )
+                rows = cur.fetchall()
+                dashboards: dict[int, dict] = {}
+                for did, dname, eid, sym, tf, dpath, edel in rows:
+                    if did not in dashboards:
+                        dashboards[did] = {"id": did, "name": dname, "data": []}
+                    dashboards[did]["data"].append({
+                        "id": eid, "symbol_name": sym, "timeframe": tf,
+                        "has_data": bool(dpath and Path(dpath).exists()),
+                        "deleted": edel,
+                    })
+                result.append({
+                    "id": uid, "email": email, "name": name,
+                    "created_at": created.isoformat(),
+                    "dashboards": list(dashboards.values()),
+                })
     return result
 
 
-@api.delete("/admin/users/{target_user_id}")
-def admin_delete_user(target_user_id: int, session: str):
+@api.delete("/admin/users/{target_id}")
+def admin_delete_user(target_id: int, session: str):
     validate_admin_session(session)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM users WHERE id = %s", (target_user_id,))
+            cur.execute("DELETE FROM users WHERE id = %s", (target_id,))
         conn.commit()
-    return {"status": "success", "message": f"User {target_user_id} deleted"}
+    return {"status": "success"}
 
 
 @api.delete("/admin/data/{data_id}")
@@ -549,22 +819,9 @@ def admin_delete_data(data_id: int, session: str):
     validate_admin_session(session)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Get symbol+timeframe+user_id before deleting so we can clean dashboard too
-            cur.execute(
-                "SELECT user_id, symbol_name, timeframe FROM data WHERE id = %s",
-                (data_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Data entry not found")
-            uid, sym, tf = row
             cur.execute("DELETE FROM data WHERE id = %s", (data_id,))
-            cur.execute(
-                "DELETE FROM dashboard WHERE user_id = %s AND symbol_name = %s AND timeframe = %s",
-                (uid, sym, tf),
-            )
         conn.commit()
-    return {"status": "success", "message": f"Data entry {data_id} permanently deleted"}
+    return {"status": "success"}
 
 
 @api.post("/admin/data/{data_id}/restore")
@@ -572,28 +829,13 @@ def admin_restore_data(data_id: int, session: str):
     validate_admin_session(session)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT user_id, symbol_name, timeframe FROM data WHERE id = %s",
-                (data_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Data entry not found")
-            uid, sym, tf = row
-            cur.execute("UPDATE data SET is_deleted = FALSE WHERE id = %s", (data_id,))
-            cur.execute(
-                """
-                UPDATE dashboard SET is_deleted = FALSE
-                WHERE user_id = %s AND symbol_name = %s AND timeframe = %s
-                """,
-                (uid, sym, tf),
-            )
+            cur.execute("UPDATE data SET delete_set = FALSE WHERE id = %s", (data_id,))
         conn.commit()
-    return {"status": "success", "message": f"Data entry {data_id} restored"}
+    return {"status": "success"}
 
 
 # ---------------------------------------------------------------------------
-# Register API router, then static (static must be LAST — it catches everything)
+# Wire up router then static (static MUST be last)
 # ---------------------------------------------------------------------------
 app.include_router(api)
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
