@@ -10,14 +10,12 @@
 $Container = "QuantOracle"
 $Volume    = "QuantOracleData"
 
-# Stop container on exit (Ctrl+C or script end)
 $CleanupBlock = {
     Write-Host "`nStopping Postgres container..."
     docker stop $Container 2>$null | Out-Null
 }
 
 try {
-    # Check if container already exists
     $exists = docker ps -a --format "{{.Names}}" 2>$null | Where-Object { $_ -eq $Container }
 
     if ($exists) {
@@ -34,12 +32,15 @@ try {
             -d postgres | Out-Null
     }
 
-    # Wait for Postgres to be ready (up to 30s)
+    # Wait on the default 'postgres' DB — 'stocks' is created by the entrypoint
+    # after Postgres is already up, so checking for 'stocks' can false-fail.
     Write-Host "Waiting for Postgres to be ready..."
     $ready = $false
-    for ($i = 1; $i -le 30; $i++) {
-        $result = docker exec $Container pg_isready -U postgres -d stocks 2>$null
+    for ($i = 1; $i -le 60; $i++) {
+        docker exec $Container pg_isready -U postgres 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
+            # Give the entrypoint a moment to finish running init.sql
+            Start-Sleep -Seconds 3
             Write-Host "Postgres is ready."
             $ready = $true
             break
@@ -47,7 +48,7 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) {
-        Write-Host "WARNING: Postgres did not become ready in 30s — starting anyway."
+        Write-Host "WARNING: Postgres did not become ready in 60s — starting anyway."
     }
 
     fastapi run main.py
