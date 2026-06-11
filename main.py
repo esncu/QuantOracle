@@ -140,14 +140,10 @@ def send_email(to: str, subject: str, body: str) -> None:
     msg["Subject"] = subject
     msg["From"]    = SMTP_FROM
     msg["To"]      = to
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
-            s.starttls()
-            s.login(SMTP_USER, SMTP_PASSWORD)
-            s.sendmail(SMTP_FROM, [to], msg.as_string())
-    except Exception as e:
-        # During development, just print — swap for real error handling in prod
-        print(f"[EMAIL STUB] To: {to} | Subject: {subject}\n{body}\n(send failed: {e})")
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        s.starttls()
+        s.login(SMTP_USER, SMTP_PASSWORD)
+        s.sendmail(SMTP_FROM, [to], msg.as_string())
 
 
 # ---------------------------------------------------------------------------
@@ -325,12 +321,19 @@ def api_recover_request(body: RecoveryRequest):
                 (sid, user_id, f"RECOVERY:{otp}", _new_expiry(RECOVERY_TTL_MINUTES)),
             )
         conn.commit()
-    print(f"[RECOVERY OTP] user_id={user_id} email={body.email} otp={otp} session={sid}")
-    send_email(
-        body.email,
-        "QuantOracle — Password Recovery",
-        f"Your one-time recovery code is: {otp}\n\nIt expires in {RECOVERY_TTL_MINUTES} minutes.",
-    )
+    try:
+        send_email(
+            body.email,
+            "QuantOracle — Password Recovery",
+            f"Your one-time recovery code is: {otp}\n\nIt expires in {RECOVERY_TTL_MINUTES} minutes.",
+        )
+    except Exception as exc:
+        # Clean up the session if email failed — don't leave a dangling OTP
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM session WHERE id = %s", (sid,))
+            conn.commit()
+        raise HTTPException(500, f"Failed to send recovery email: {exc}")
     return {"status": "success", "message": "If that email exists, a code was sent", "session_id": sid}
 
 

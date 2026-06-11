@@ -11088,11 +11088,19 @@
     "fake": "false"
   },
   {
-    "candle_close_timestamp": "1780531200",
+    "candle_close_timestamp": "1780617600",
     "open": "215.7300",
     "high": "232.2800",
-    "low": "210.9700",
-    "close": "218.6600",
+    "low": "204.3300",
+    "close": "205.1000",
+    "fake": "false"
+  },
+  {
+    "candle_close_timestamp": "1781049600",
+    "open": "210.1800",
+    "high": "211.4000",
+    "low": "199.3400",
+    "close": "200.4200",
     "fake": "false"
   }
 ]
