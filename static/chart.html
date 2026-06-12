@@ -39,7 +39,15 @@
                 <div id="chart" style="height: 450px; width: 100%;"></div>
 
                 <div class="p-4 has-background-white-bis">
-                    <button class="button is-primary is-fullwidth" onclick="location.reload()">Click to update chart</button>
+                    <div class="buttons" style="gap:8px;">
+                        <button id="refreshBtn" class="button is-info" style="flex:1" onclick="doRefresh()">
+                            Refresh Data <span class="is-size-7 ml-1 has-text-weight-normal">(reuse model)</span>
+                        </button>
+                        <button id="regenBtn" class="button is-warning" style="flex:1" onclick="doRegen()">
+                            Retrain Model <span class="is-size-7 ml-1 has-text-weight-normal">(full rebuild)</span>
+                        </button>
+                    </div>
+                    <p id="actionStatus" class="is-size-7 has-text-grey mt-2" style="min-height:18px;"></p>
                 </div>
             </div>
         </div>
@@ -91,25 +99,23 @@
                 return;
             }
 
-            // FIX: API returns candle_close_timestamp (UNIX seconds).
-            // LightweightCharts v4+ candlestick series needs { time, open, high, low, close }
-            // where `time` is a UNIX timestamp (number) or "YYYY-MM-DD" string.
-            const candles = (payload.data?.data || payload.data || []).map(d => ({
-                time:  parseInt(d.candle_close_timestamp, 10),
-                open:  parseFloat(d.open),
-                high:  parseFloat(d.high),
-                low:   parseFloat(d.low),
-                close: parseFloat(d.close),
-                // colour forecast candles gold (up) / purple (down)
-                ...(d.fake === "true" ? {
-                    color:       d.close >= d.open ? '#FFD700' : '#BF00FF',
-                    wickColor:   d.close >= d.open ? '#FFD700' : '#BF00FF',
-                    borderColor: d.close >= d.open ? '#FFD700' : '#BF00FF',
-                } : {}),
-            }));
+            const rawCandles = (payload.data?.data || payload.data || []);
+            rawCandles.sort((a,b) => parseInt(a.candle_close_timestamp) - parseInt(b.candle_close_timestamp));
 
-            // Sort ascending (required by LightweightCharts)
-            candles.sort((a, b) => a.time - b.time);
+            const candles = rawCandles.map(d => {
+                const isFake = d.fake === "true";
+                const o = parseFloat(d.open), cl = parseFloat(d.close);
+                return {
+                    time:  parseInt(d.candle_close_timestamp, 10),
+                    open:  o, high: parseFloat(d.high),
+                    low:   parseFloat(d.low), close: cl,
+                    ...(isFake ? {
+                        color:       cl >= o ? '#b04fff' : '#7c00e0',
+                        wickColor:   cl >= o ? '#b04fff' : '#7c00e0',
+                        borderColor: cl >= o ? '#b04fff' : '#7c00e0',
+                    } : {}),
+                };
+            });
 
             const chart = LightweightCharts.createChart(document.getElementById('chart'), {
                 layout: { background: { color: '#ffffff' }, textColor: '#333' },
@@ -119,20 +125,73 @@
             });
 
             const series = chart.addSeries(LightweightCharts.CandlestickSeries, {
-                upColor:   '#48c78e',
-                downColor: '#f14668',
-                borderUpColor:   '#48c78e',
-                borderDownColor: '#f14668',
-                wickUpColor:     '#48c78e',
-                wickDownColor:   '#f14668',
+                upColor:        '#48c78e', downColor:      '#f14668',
+                borderUpColor:  '#48c78e', borderDownColor:'#f14668',
+                wickUpColor:    '#48c78e', wickDownColor:  '#f14668',
             });
-
-            // FIX: was called twice (second call overwrote the first uselessly)
             series.setData(candles);
+
+            // Purple background behind prediction candles using a Histogram overlay
+            const fakeCandles = rawCandles.filter(d => d.fake === "true");
+            if (fakeCandles.length) {
+                try {
+                    const bgSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+                        color: 'rgba(140,0,255,0.12)',
+                        priceScaleId: '',
+                        lastValueVisible: false,
+                        priceLineVisible: false,
+                    });
+                    // Use a very large value so it fills the pane height
+                    bgSeries.setData(fakeCandles.map(d => ({
+                        time:  parseInt(d.candle_close_timestamp, 10),
+                        value: 1e10,
+                    })));
+                } catch(_) { /* older LightweightCharts — skip background */ }
+            }
+
             chart.timeScale().fitContent();
         }
 
         loadChart();
+
+        // ----------------------------------------------------------------
+        // Refresh / Regen actions
+        // ----------------------------------------------------------------
+        function setActionStatus(msg, isErr=false) {
+            const el = document.getElementById('actionStatus');
+            if (el) { el.textContent = msg; el.style.color = isErr ? '#f14668' : '#888'; }
+        }
+
+        async function chartAction(action) {
+            const apiKey = localStorage.getItem(LS_KEY) || document.getElementById('chartApiKey')?.value.trim() || '';
+            if (!apiKey) { setActionStatus('Enter your AlphaVantage API key above first.', true); return; }
+            const btn = document.getElementById(action === 'REFRESH' ? 'refreshBtn' : 'regenBtn');
+            if (btn) { btn.classList.add('is-loading'); btn.disabled = true; }
+            setActionStatus(action === 'REFRESH' ? 'Fetching new data…' : 'Retraining model…');
+            try {
+                const keyParam = `&api_key=${encodeURIComponent(apiKey)}`;
+                const didParam = dash_id ? `&dash_id=${encodeURIComponent(dash_id)}` : '';
+                const res = await fetch(
+                    `/api/chart/?session=${session}&action=${action}&index=${encodeURIComponent(index)}&time=${encodeURIComponent(time)}${didParam}${keyParam}`,
+                    { method: 'POST' }
+                );
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                if (data.status === 'pending') {
+                    setActionStatus('Task started — the chart will update when complete.');
+                } else {
+                    setActionStatus('Done. Reloading…');
+                    setTimeout(() => location.reload(), 800);
+                }
+            } catch (err) {
+                setActionStatus(`Error: ${err.message}`, true);
+            } finally {
+                if (btn) { btn.classList.remove('is-loading'); btn.disabled = false; }
+            }
+        }
+
+        function doRefresh() { chartAction('REFRESH'); }
+        function doRegen()   { chartAction('REGEN');   }
 
         // ----------------------------------------------------------------
         // Topbar

@@ -13,7 +13,7 @@ import bcrypt
 import psycopg2
 import requests
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -211,6 +211,15 @@ def series_to_candles(series: dict) -> list[dict]:
 def data_path(user_id: int, symbol: str, timeframe: str) -> Path:
     return DATA_ROOT / str(user_id) / symbol / f"{timeframe}.json"
 
+def pred_path(user_id: int, symbol: str, timeframe: str) -> Path:
+    return DATA_ROOT / str(user_id) / symbol / f"{timeframe}_preds.json"
+
+def model_path(user_id: int, symbol: str, timeframe: str) -> Path:
+    return DATA_ROOT / str(user_id) / symbol / f"{timeframe}_model.pt"
+
+def lock_path(user_id: int, symbol: str, timeframe: str) -> Path:
+    return DATA_ROOT / str(user_id) / symbol / f"{timeframe}.lock"
+
 def write_candles(user_id: int, symbol: str, timeframe: str, candles: list[dict]) -> Path:
     p = data_path(user_id, symbol, timeframe)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -221,6 +230,12 @@ def read_candles(path: str | Path) -> list[dict] | None:
     p = Path(path)
     if not p.exists():
         return None
+    return json.loads(p.read_text())
+
+def read_preds(user_id: int, symbol: str, timeframe: str) -> list[dict]:
+    p = pred_path(user_id, symbol, timeframe)
+    if not p.exists():
+        return []
     return json.loads(p.read_text())
 
 
@@ -427,9 +442,18 @@ def dashboard_ep(
                                 "1W": {"id": None, "ready": False, "deleted": False},
                             }
                         if tf in symbols[sym]:
+                            # Derive user_id from the outer loop context
+                            lp = lock_path(user_id, sym, tf)
+                            dp = Path(dpath) if dpath else None
+                            if lp.exists():
+                                state = "pending"
+                            elif dp and dp.exists():
+                                state = "ready"
+                            else:
+                                state = "empty"
                             symbols[sym][tf] = {
                                 "id":      eid,
-                                "ready":   bool(dpath and Path(dpath).exists()),
+                                "state":   state,
                                 "deleted": edel,
                             }
                     result.append({
@@ -651,6 +675,7 @@ def dashboard_ep(
 
 @api.post("/chart/")
 def chart_ep(
+    background_tasks: BackgroundTasks,
     session:  str,
     action:   str,
     index:    str | None = None,
@@ -709,7 +734,8 @@ def chart_ep(
         if row and row[1]:
             candles = read_candles(row[1])
             if candles:
-                return {"status": "success", "data": {"data": candles, "forecast": []}}
+                preds = read_preds(user_id, index.upper(), time)
+                return {"status": "success", "data": {"data": candles + preds, "forecast": []}}
 
         # No file — try fetching from AV if key provided
         key = api_key
@@ -739,28 +765,96 @@ def chart_ep(
             return {"status": "success", "data": {"data": json.loads(tempdata.read_text()), "forecast": []}}
         raise HTTPException(404, f"No data for {index} [{time}] and no API key provided")
 
+    # ---- REFRESH -----------------------------------------------------------
+    # Pull new data, append only new candles, run existing model, update preds
+    if action == "REFRESH":
+        if not api_key:
+            raise HTTPException(400, "api_key is required for REFRESH")
+        if not row:
+            raise HTTPException(404, f"No data entry for {index} [{time}]")
+        mp = model_path(user_id, index.upper(), time)
+        if not mp.exists():
+            raise HTTPException(400, "No trained model found — use REGEN first")
+        lp = lock_path(user_id, index.upper(), time)
+        if lp.exists():
+            return {"status": "pending", "message": "Task already in progress"}
+
+        # Pull new candles from AV
+        try:
+            series   = fetch_av(index.upper(), time, api_key)
+            new_cands = series_to_candles(series)
+        except ValueError as exc:
+            raise HTTPException(502, str(exc))
+        except Exception as exc:
+            raise HTTPException(502, f"Upstream error: {exc}")
+
+        # Merge: keep existing real candles, append any newer ones
+        existing = read_candles(row[1]) or []
+        real_existing = [c for c in existing if str(c.get("fake","false")).lower() == "false"]
+        existing_ts   = {c["candle_close_timestamp"] for c in real_existing}
+        appended      = real_existing + [c for c in new_cands if c["candle_close_timestamp"] not in existing_ts]
+
+        dp = data_path(user_id, index.upper(), time)
+        dp.parent.mkdir(parents=True, exist_ok=True)
+        dp.write_text(json.dumps(appended, indent=2))
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE data SET data_path = %s WHERE id = %s", (str(dp), row[0]))
+            conn.commit()
+
+        # Background: run inference with existing model
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        lp.touch()
+        pp = pred_path(user_id, index.upper(), time)
+
+        from stockml import inference_only
+        background_tasks.add_task(inference_only, dp, pp, mp, lp, time)
+
+        return {"status": "pending", "message": "Inference started"}
+
     # ---- REGEN -------------------------------------------------------------
+    # Pull fresh data, delete old files, train new model, generate preds
     if action == "REGEN":
         if not api_key:
             raise HTTPException(400, "api_key is required for REGEN")
         if not row:
             raise HTTPException(404, f"No data entry for {index} [{time}]")
+        lp = lock_path(user_id, index.upper(), time)
+        if lp.exists():
+            return {"status": "pending", "message": "Task already in progress"}
+
         try:
-            series  = fetch_av(index.upper(), time or "1D", api_key)
+            series  = fetch_av(index.upper(), time, api_key)
             candles = series_to_candles(series)
-            fpath   = write_candles(user_id, index.upper(), time, candles)
         except ValueError as exc:
             raise HTTPException(502, str(exc))
         except Exception as exc:
             raise HTTPException(502, f"Upstream error: {exc}")
+
+        # Write fresh real data, wipe old preds and model
+        fpath = write_candles(user_id, index.upper(), time, candles)
+        mp    = model_path(user_id, index.upper(), time)
+        pp    = pred_path(user_id, index.upper(), time)
+        for old_file in (mp, pp):
+            if old_file.exists():
+                old_file.unlink()
+
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE data SET data_path = %s WHERE id = %s",
-                    (str(fpath), row[0]),
+                    "UPDATE data SET data_path = %s, model_path = %s WHERE id = %s",
+                    (str(fpath), str(mp), row[0]),
                 )
             conn.commit()
-        return {"status": "success", "data": {"data": candles, "forecast": []}}
+
+        # Background: train new model and generate preds
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        lp.touch()
+
+        from stockml import train_and_predict
+        background_tasks.add_task(train_and_predict, fpath, pp, mp, lp, time)
+
+        return {"status": "pending", "message": "Training started"}
 
     raise HTTPException(400, f"Unknown chart action: {action!r}")
 

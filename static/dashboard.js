@@ -1,5 +1,7 @@
 const TIMEFRAMES         = ['5M', '1H', '1D', '1W'];
-const PREMIUM_TIMEFRAMES = ['5M', '1H'];
+const PREMIUM_TIMEFRAMES = ['5M', '1H'];   // require AlphaVantage premium
+const pendingPolls = {};  // tracks in-progress training boxes
+
 const params    = new URLSearchParams(window.location.search);
 const session   = params.get('session');
 const username  = localStorage.getItem('qo_username') || 'user';
@@ -126,22 +128,31 @@ function renderPanel() {
             html += `<div class="index-row">
                 <div class="col-name">${sym}</div>
                 ${TIMEFRAMES.map(tf => {
-                    const entry = symbols[sym]?.[tf];
-                    if (!entry || !entry.id) {
-                        // No DB row yet — clicking creates the row (no data pull)
-                        return `<div class="col-tf"><div class="status-box is-pending"
-                            onclick="generateEntry(${dash.id},'${sym}','${tf}')"
-                            title="Click to pull data"></div></div>`;
-                    }
-                    if (entry.ready) {
+                    const entry   = symbols[sym]?.[tf];
+                    const state   = entry?.state || 'empty';
+                    const pollKey = `${dash.id}|${sym}|${tf}`;
+                    const boxId   = `box_${dash.id}_${sym}_${tf}`;
+
+                    if (state === 'ready') {
+                        if (pendingPolls[pollKey]) {
+                            clearInterval(pendingPolls[pollKey].intervalId);
+                            delete pendingPolls[pollKey];
+                        }
                         return `<div class="col-tf"><a class="status-box is-ready"
                             href="chart.html?session=${session}&index=${encodeURIComponent(sym)}&time=${encodeURIComponent(tf)}&dash_id=${dash.id}"
                             title="View chart"></a></div>`;
                     }
-                    // Row exists but no data file yet
-                    return `<div class="col-tf"><div class="status-box is-pending"
+                    if (state === 'pending') {
+                        if (!pendingPolls[pollKey]) startPolling(dash.id, sym, tf);
+                        const cd = pendingPolls[pollKey]?.countdown ?? 10;
+                        return `<div class="col-tf"><div class="status-box is-loading-box"
+                            id="${boxId}" title="Training… ${cd}s">⟳</div></div>`;
+                    }
+                    // empty
+                    const premiumTf = PREMIUM_TIMEFRAMES.includes(tf);
+                    return `<div class="col-tf"><div class="status-box ${premiumTf ? 'is-premium-empty' : 'is-pending'}"
                         onclick="generateEntry(${dash.id},'${sym}','${tf}')"
-                        title="Click to pull data"></div></div>`;
+                        title="${premiumTf ? 'Requires premium AlphaVantage' : 'Click to generate'}"></div></div>`;
                 }).join('')}
                 <div class="col-action">
                     <button class="button is-white is-small" title="Remove"
@@ -218,6 +229,37 @@ async function generateEntry(dashId, sym, tf) {
     await api('GENERATE', { dash_id: dashId, index: sym, time: tf, api_key: key });
     await loadAndRender();
     window.location.href = `chart.html?session=${session}&index=${encodeURIComponent(sym)}&time=${encodeURIComponent(tf)}&dash_id=${dashId}`;
+}
+
+function startPolling(dashId, sym, tf) {
+    const pollKey = `${dashId}|${sym}|${tf}`;
+    if (pendingPolls[pollKey]) return;
+    let countdown = 10;
+    const intervalId = setInterval(async () => {
+        countdown--;
+        const box = document.getElementById(`box_${dashId}_${sym}_${tf}`);
+        if (box) box.title = `Training… ${countdown}s`;
+        if (countdown <= 0) {
+            countdown = 10;
+            try {
+                const data = await api('GET');
+                if (!data.data) return;
+                allDashboards = data.data;
+                const dash  = allDashboards.find(d => d.id === dashId);
+                const state = dash?.symbols?.[sym]?.[tf]?.state;
+                if (state === 'ready') {
+                    clearInterval(intervalId);
+                    delete pendingPolls[pollKey];
+                }
+                // Re-render regardless to update box appearance
+                if (!activeDashId || !allDashboards.find(d => d.id === activeDashId))
+                    activeDashId = allDashboards[0]?.id ?? null;
+                renderTabs();
+                renderPanel();
+            } catch (e) { /* keep polling */ }
+        }
+    }, 1000);
+    pendingPolls[pollKey] = { intervalId, countdown: 10 };
 }
 
 async function tmpDeleteSymbol(dashId, sym) {
