@@ -40,3 +40,4 @@ if AMD GPU:
 
 - "Is the server running..." "Network error: JSON.parse..." in login process
   - Docker does not have permissions to init.sql, run `chmod o+r init.sql` or give read permissions for init.sql to all
+  - Alternatively, on Linux, you can run `./perms.sh` to give full perms to all related files automatically
