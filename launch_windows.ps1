@@ -48,7 +48,7 @@ try {
         Start-Sleep -Seconds 1
     }
     if (-not $ready) {
-        Write-Host "WARNING: Postgres did not become ready in 60s — starting anyway."
+        Write-Host "WARNING: Postgres did not become ready in 60s - starting anyway."
     }
 
     fastapi run main.py

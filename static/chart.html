@@ -149,10 +149,82 @@
                 } catch(_) { /* older LightweightCharts — skip background */ }
             }
 
+            // Forecast cone — upper (green) and lower (red) LineSeries
+            const forecastData = payload.data?.forecast;
+            if (forecastData?.upper?.length && forecastData?.lower?.length) {
+                const toLineData = arr => arr.map(d => ({
+                    time:  parseInt(d.candle_close_timestamp, 10),
+                    value: parseFloat(d.value),
+                })).sort((a, b) => a.time - b.time);
+
+                const upperSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                    color:           'rgba(72, 199, 142, 0.55)',   // semi-transparent green
+                    lineWidth:       2,
+                    lineStyle:       1,   // dashed
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                upperSeries.setData(toLineData(forecastData.upper));
+
+                const lowerSeries = chart.addSeries(LightweightCharts.LineSeries, {
+                    color:           'rgba(241, 70, 104, 0.55)',   // semi-transparent red
+                    lineWidth:       2,
+                    lineStyle:       1,   // dashed
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                });
+                lowerSeries.setData(toLineData(forecastData.lower));
+            }
+
             chart.timeScale().fitContent();
         }
 
         loadChart();
+
+        // ----------------------------------------------------------------
+        // Poll for pending tasks (REGEN/REFRESH running in background)
+        // ----------------------------------------------------------------
+        let _pollInterval = null;
+
+        function startChartPolling() {
+            if (_pollInterval) return;
+            let countdown = 10;
+            const el = () => document.getElementById('actionStatus');
+
+            // Poll immediately once, then every 10s
+            async function doPoll() {
+                try {
+                    const didParam = dash_id ? `&dash_id=${encodeURIComponent(dash_id)}` : '';
+                    const apiKey   = localStorage.getItem(LS_KEY) || '';
+                    const keyParam = apiKey ? `&api_key=${encodeURIComponent(apiKey)}` : '';
+                    const res = await fetch(
+                        `/api/chart/?session=${session}&action=GET&index=${encodeURIComponent(index)}&time=${encodeURIComponent(time)}${didParam}${keyParam}`,
+                        { method: 'POST' }
+                    );
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    const hasPreds = (data.data?.data || []).some(d => d.fake === 'true');
+                    if (hasPreds) {
+                        clearInterval(_pollInterval);
+                        _pollInterval = null;
+                        setActionStatus('Done. Reloading…');
+                        setTimeout(() => location.reload(), 600);
+                        return;
+                    }
+                } catch(_) {}
+                // Reset countdown for next poll
+                countdown = 10;
+            }
+
+            _pollInterval = setInterval(() => {
+                countdown--;
+                const e = el();
+                if (e) e.textContent = `Training in progress — checking in ${countdown}s…`;
+                if (countdown <= 0) doPoll();
+            }, 1000);
+        }
 
         // ----------------------------------------------------------------
         // Refresh / Regen actions
@@ -178,7 +250,8 @@
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
                 if (data.status === 'pending') {
-                    setActionStatus('Task started — the chart will update when complete.');
+                    setActionStatus('Task started - checking in 10s…');
+                    startChartPolling();
                 } else {
                     setActionStatus('Done. Reloading…');
                     setTimeout(() => location.reload(), 800);

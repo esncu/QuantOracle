@@ -1,253 +1,414 @@
 """
-stockml.py — LSTM-based OHLC prediction for QuantOracle
---------------------------------------------------------
-Input:  real candle data JSON  (list of candle dicts with fake=false)
-Output: prediction candle JSON (list of candle dicts with fake=true)
-        saved model            .pt file
+stockml.py - LSTM-based OHLC prediction for QuantOracle
 
-Usage (called from main.py background task):
-    from stockml import train_and_predict
-    train_and_predict(data_path, pred_path, model_path, lock_path, horizon=20)
+Trains on candle-to-candle price CHANGES (returns) rather than absolute prices.
+This forces the model to learn momentum and direction instead of regressing
+to the mean price level, producing dynamic predictions that compound naturally.
+
+Architecture: autoregressive single-step LSTM with MC Dropout
+- Input:  sequence of per-candle changes: [d_open, d_high, d_low, d_close]
+          where d_x = (x_t - x_{t-1}) / x_{t-1}  (percentage return)
+- Output: predicted [d_open, d_close] for the next candle
+- high = max(open, close), low = min(open, close) for pred candles
+- Predictions are accumulated back to absolute prices from the last real candle
+
+MC Dropout (50 passes):
+- Mean trajectory  → purple prediction candles (fake=true)
+- Std of passes    → cone bounds, widens rightward as uncertainty compounds
+
+Output: {timeframe}_preds.json
+  {
+    "predictions": [ {candle_close_timestamp, open, high, low, close, fake} ],
+    "forecast":    { "upper": [{candle_close_timestamp, value}],
+                     "lower": [{candle_close_timestamp, value}] }
+  }
 """
 
 import json
-import math
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
 
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-MAX_CANDLES  = 100    # cap input to keep training fast on low-end hardware
-HORIZON      = 20     # number of candles to predict ahead
-HIDDEN_SIZE  = 64
-NUM_LAYERS   = 2
-EPOCHS       = 100
-LR           = 1e-3
-FEATURES     = ["open", "high", "low", "close"]   # order matters for tensors
+MAX_CANDLES = 100
+HORIZON = 20
+HIDDEN_SIZE = 128
+NUM_LAYERS = 2
+EPOCHS = 300
+LR = 5e-4
+MC_SAMPLES = 50
+RETURN_DECAY = 0.80  # dampens returns per step; prevents indefinite trending
+MEAN_REVERT_MIX = 0.30  # blend toward historical mean return
+FEATURES = ["open", "high", "low", "close"]
 
 
 # ---------------------------------------------------------------------------
 # Model
 # ---------------------------------------------------------------------------
 
+
 class CandleLSTM(nn.Module):
-    def __init__(self, input_size=4, hidden_size=HIDDEN_SIZE,
-                 num_layers=NUM_LAYERS, horizon=HORIZON):
+    def __init__(self):
         super().__init__()
-        self.horizon = horizon
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers,
-                            batch_first=True, dropout=0.2)
-        # Predict open+close for each horizon step; high=max(o,c), low=min(o,c)
-        self.fc = nn.Linear(hidden_size, horizon * 2)
+        self.lstm = nn.LSTM(
+            4,
+            HIDDEN_SIZE,
+            NUM_LAYERS,
+            batch_first=True,
+            dropout=0.3 if NUM_LAYERS > 1 else 0.0,
+        )
+        self.dropout = nn.Dropout(p=0.3)
+        self.fc = nn.Linear(HIDDEN_SIZE, 2)  # d_open, d_close
 
-    def forward(self, x):
-        # x: (batch, seq_len, features)
-        out, _ = self.lstm(x)
-        last    = out[:, -1, :]          # take last timestep
-        pred    = self.fc(last)          # (batch, horizon*2)
-        return pred.view(-1, self.horizon, 2)  # (batch, horizon, 2)
+    def forward(self, x, hc=None):
+        assert x.dim() == 3, f"Expected 3D input got {x.dim()}D: {x.shape}"
+        out, hc_out = self.lstm(x, hc)
+        pred = self.fc(self.dropout(out[:, -1, :]))  # (batch, 2)
+        return pred, hc_out
+
+    def enable_dropout(self):
+        for m in self.modules():
+            if isinstance(m, nn.Dropout):
+                m.train()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Return space helpers
 # ---------------------------------------------------------------------------
 
-def _load_real(data_path: Path) -> list[dict]:
-    """Load and return only real (fake=false) candles, capped at MAX_CANDLES."""
-    candles = json.loads(data_path.read_text())
-    real    = [c for c in candles if str(c.get("fake", "false")).lower() == "false"]
-    return real[-MAX_CANDLES:]   # keep most recent
+
+def _to_returns(arr: np.ndarray) -> np.ndarray:
+    """
+    Convert absolute OHLC array (N, 4) to percentage returns (N-1, 4).
+    d_x[t] = (x[t] - x[t-1]) / x[t-1]
+    Clipped to [-0.5, 0.5] to avoid exploding gradients on large moves.
+    """
+    eps = 1e-8
+    returns = (arr[1:] - arr[:-1]) / (arr[:-1] + eps)
+    return np.clip(returns, -0.5, 0.5).astype(np.float32)
 
 
-def _to_tensor(candles: list[dict]) -> tuple[torch.Tensor, np.ndarray, np.ndarray]:
-    """
-    Normalise OHLC to [0,1] per-feature using min-max over the window.
-    Returns (tensor, mins_array, scales_array) for denormalisation.
-    """
-    arr = np.array(
-        [[float(c[f]) for f in FEATURES] for c in candles],
-        dtype=np.float32,
+def _load_real(path: Path) -> list[dict]:
+    data = json.loads(path.read_text())
+    real = [c for c in data if str(c.get("fake", "false")).lower() == "false"]
+    return real[-MAX_CANDLES:]
+
+
+def _to_arr(candles: list[dict]) -> np.ndarray:
+    return np.array(
+        [[float(c[f]) for f in FEATURES] for c in candles], dtype=np.float32
     )
-    mins   = arr.min(axis=0)
-    maxs   = arr.max(axis=0)
-    scales = np.where((maxs - mins) == 0, 1.0, maxs - mins)
-    normed = (arr - mins) / scales
-    return torch.tensor(normed).unsqueeze(0), mins, scales  # (1, seq, 4)
 
 
-def _denorm(value: float, min_: float, scale: float) -> float:
-    return round(float(value * scale + min_), 4)
-
-
-def _next_timestamps(last_ts: int, n: int, timeframe: str) -> list[int]:
-    """Generate n future UNIX timestamps after last_ts based on timeframe."""
-    intervals = {"5M": 300, "1H": 3600, "1D": 86400, "1W": 604800}
-    step = intervals.get(timeframe, 86400)
+def _future_ts(last_ts: int, n: int, tf: str) -> list[int]:
+    step = {"5M": 300, "1H": 3600, "1D": 86400, "1W": 604800}.get(tf, 86400)
     return [last_ts + step * (i + 1) for i in range(n)]
+
+
+def _make_input(d_o: float, d_h: float, d_l: float, d_c: float) -> torch.Tensor:
+    """Single return-space candle as (1, 1, 4) LSTM input."""
+    return torch.tensor([[[d_o, d_h, d_l, d_c]]], dtype=torch.float32)
+
+
+# ---------------------------------------------------------------------------
+# Training on returns
+# ---------------------------------------------------------------------------
+
+
+def _train(returns: np.ndarray, window: int, horizon: int) -> CandleLSTM:
+    """
+    Build sliding windows over the return series and train.
+    X: (N, window, 4)  — input windows of returns
+    Y: (N, horizon, 2) — target [d_open, d_close] for next horizon steps
+    """
+    xs, ys = [], []
+    for i in range(len(returns) - window - horizon + 1):
+        xs.append(returns[i : i + window])
+        ys.append(returns[i + window : i + window + horizon, [0, 3]])  # d_open, d_close
+
+    if not xs:
+        split = max(1, len(returns) - horizon)
+        xs = [returns[:split]]
+        ys = [returns[split:, [0, 3]]]
+        horizon = len(ys[0])
+
+    X = torch.tensor(np.array(xs), dtype=torch.float32)  # (N, window, 4)
+    Y = torch.tensor(np.array(ys), dtype=torch.float32)  # (N, horizon, 2)
+
+    model = CandleLSTM()
+    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    loss_fn = nn.MSELoss()
+
+    model.train()
+    for epoch in range(EPOCHS):
+        opt.zero_grad()
+        _, hc = model(X)
+        step_input = X[:, -1:, :]  # (N, 1, 4) — last return as seed
+
+        # Scheduled sampling: mix teacher forcing with model output
+        teacher_ratio = max(0.5, 1.0 - epoch / EPOCHS)
+        step_loss = None
+
+        for t in range(horizon):
+            pred_oc, hc = model(step_input, hc)  # (N, 2)  d_open, d_close
+            tgt = Y[:, t, :]  # (N, 2)
+            sl = loss_fn(pred_oc, tgt)
+            step_loss = sl if step_loss is None else step_loss + sl
+
+            if torch.rand(1).item() < teacher_ratio:
+                do = tgt[:, 0:1]
+                dc = tgt[:, 1:2]
+            else:
+                do = pred_oc[:, 0:1].detach()
+                dc = pred_oc[:, 1:2].detach()
+
+            dh = torch.max(do, dc)
+            dl = torch.min(do, dc)
+            step_input = torch.stack([do, dh, dl, dc], dim=2)  # (N,1,4)
+
+        if step_loss is not None:
+            (step_loss / horizon).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+
+    return model
+
+
+# ---------------------------------------------------------------------------
+# MC Dropout rollout in return space → absolute price predictions + cone
+# ---------------------------------------------------------------------------
+
+
+def _mc_rollout(
+    model: CandleLSTM,
+    seed_returns: np.ndarray,
+    last_abs: np.ndarray,
+    horizon: int,
+    last_ts: int,
+    tf: str,
+    hist_mean_return: np.ndarray = None,
+    n_samples: int = MC_SAMPLES,
+):
+    """
+    seed_returns : (window, 4)  — normalised return window as model input
+    last_abs     : (4,)         — last real candle's absolute OHLC prices
+                                  used to accumulate predictions back to prices
+
+    Returns:
+      predictions : list[dict]  — mean candles, fake=true, absolute prices
+      forecast    : dict        — {"upper": [...], "lower": [...]}
+    """
+    model.eval()
+    model.enable_dropout()
+
+    seed = torch.tensor(
+        seed_returns[np.newaxis, :, :], dtype=torch.float32
+    )  # (1,window,4)
+    assert seed.dim() == 3
+
+    timestamps = _future_ts(last_ts, horizon, tf)
+
+    if hist_mean_return is None:
+        hist_mean_return = np.zeros(4, dtype=np.float32)
+
+    # Collect all sample trajectories in absolute price space
+    # Shape: (n_samples, horizon)  — just close prices for cone
+    all_closes = np.zeros((n_samples, horizon), dtype=np.float32)
+    all_opens = np.zeros((n_samples, horizon), dtype=np.float32)
+
+    with torch.no_grad():
+        for s in range(n_samples):
+            _, hc = model(seed)
+            step_input = _make_input(*seed_returns[-1].tolist())  # (1,1,4)
+
+            # Accumulate from last real absolute prices
+            prev_open = float(last_abs[0])
+            prev_close = float(last_abs[3])
+
+            for t in range(horizon):
+                pred_ret, hc = model(step_input, hc)  # (1, 2) — d_open, d_close
+                d_o = pred_ret[0, 0].item()
+                d_c = pred_ret[0, 1].item()
+
+                # 1. Mean reversion: blend toward historical mean return
+                d_o = (1 - MEAN_REVERT_MIX) * d_o + MEAN_REVERT_MIX * float(
+                    hist_mean_return[0]
+                )
+                d_c = (1 - MEAN_REVERT_MIX) * d_c + MEAN_REVERT_MIX * float(
+                    hist_mean_return[3]
+                )
+
+                # 2. Decay: dampen further-out steps progressively
+                step_decay = RETURN_DECAY**t
+                d_o *= step_decay
+                d_c *= step_decay
+
+                # Convert return → absolute price
+                abs_o = prev_open * (1.0 + d_o)
+                abs_c = prev_close * (1.0 + d_c)
+
+                all_opens[s, t] = abs_o
+                all_closes[s, t] = abs_c
+
+                # Next step input: compute returns relative to this candle
+                d_h = max(d_o, d_c)
+                d_l = min(d_o, d_c)
+                step_input = _make_input(d_o, d_h, d_l, d_c)
+
+                prev_open = abs_o
+                prev_close = abs_c
+
+    # Mean trajectory → prediction candles
+    mean_o = all_opens.mean(axis=0)  # (horizon,)
+    mean_c = all_closes.mean(axis=0)
+
+    # Std across samples → uncertainty cone, widens rightward
+    std_c = all_closes.std(axis=0)
+    cone_scale = np.array([1.0 + 0.2 * i for i in range(horizon)], dtype=np.float32)
+    spread = std_c * cone_scale
+
+    predictions = []
+    upper = []
+    lower = []
+
+    for i, ts in enumerate(timestamps):
+        o = round(float(mean_o[i]), 4)
+        c = round(float(mean_c[i]), 4)
+        h = max(o, c)
+        l = min(o, c)
+
+        predictions.append(
+            {
+                "candle_close_timestamp": str(ts),
+                "open": str(o),
+                "high": str(h),
+                "low": str(l),
+                "close": str(c),
+                "fake": "true",
+            }
+        )
+
+        upper.append(
+            {
+                "candle_close_timestamp": str(ts),
+                "value": str(round(float(mean_c[i] + spread[i]), 4)),
+            }
+        )
+        lower.append(
+            {
+                "candle_close_timestamp": str(ts),
+                "value": str(round(float(mean_c[i] - spread[i]), 4)),
+            }
+        )
+
+    return predictions, {"upper": upper, "lower": lower}
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def train_and_predict(
-    data_path:  Path,
-    pred_path:  Path,
+    data_path: Path,
+    pred_path: Path,
     model_path: Path,
-    lock_path:  Path,
-    timeframe:  str  = "1D",
-    horizon:    int  = HORIZON,
+    lock_path: Path,
+    timeframe: str = "1D",
+    horizon: int = HORIZON,
 ) -> None:
-    """
-    Full pipeline: load data → train LSTM → predict → save preds + model.
-    The lock_path file must be created by the caller before calling this,
-    and will be deleted by this function on completion (or error).
-    """
     try:
-        _run(data_path, pred_path, model_path, timeframe, horizon)
+        candles = _load_real(data_path)
+        if not candles:
+            raise ValueError("No real candles found")
+
+        arr = _to_arr(candles)
+        returns = _to_returns(arr)  # (N-1, 4) return series
+
+        window = max(1, min(len(returns) - horizon, MAX_CANDLES - horizon))
+        model = _train(returns, window, horizon)
+
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "state_dict": model.state_dict(),
+                "window": window,
+                "horizon": horizon,
+                "hist_mean": returns.mean(axis=0).tolist(),
+            },
+            model_path,
+        )
+
+        last_ts = int(candles[-1]["candle_close_timestamp"])
+        last_abs = arr[-1]  # (4,) last real OHLC
+        seed_returns = returns[-window:]  # (window, 4)
+        hist_mean = returns.mean(axis=0)
+        preds, forecast = _mc_rollout(
+            model,
+            seed_returns,
+            last_abs,
+            horizon,
+            last_ts,
+            timeframe,
+            hist_mean_return=hist_mean,
+        )
+
+        pred_path.parent.mkdir(parents=True, exist_ok=True)
+        pred_path.write_text(
+            json.dumps({"predictions": preds, "forecast": forecast}, indent=2)
+        )
+
     finally:
         if lock_path.exists():
             lock_path.unlink()
 
 
 def inference_only(
-    data_path:  Path,
-    pred_path:  Path,
+    data_path: Path,
+    pred_path: Path,
     model_path: Path,
-    lock_path:  Path,
-    timeframe:  str = "1D",
-    horizon:    int = HORIZON,
+    lock_path: Path,
+    timeframe: str = "1D",
+    horizon: int = HORIZON,
 ) -> None:
-    """
-    Load existing model, run inference on current real data, overwrite preds.
-    Used by REFRESH action — does NOT retrain.
-    """
     try:
-        _run_inference(data_path, pred_path, model_path, timeframe, horizon)
+        if not model_path.exists():
+            raise FileNotFoundError(f"No model at {model_path} — run REGEN first")
+
+        candles = _load_real(data_path)
+        if not candles:
+            raise ValueError("No real candles found")
+
+        ck = torch.load(model_path, weights_only=True)
+        window = ck["window"]
+        saved_h = ck["horizon"]
+        hist_mean = np.array(ck.get("hist_mean", [0.0] * 4), dtype=np.float32)
+
+        model = CandleLSTM()
+        model.load_state_dict(ck["state_dict"])
+
+        arr = _to_arr(candles)
+        returns = _to_returns(arr)
+        last_ts = int(candles[-1]["candle_close_timestamp"])
+        last_abs = arr[-1]
+        seed_returns = returns[-window:]
+
+        preds, forecast = _mc_rollout(
+            model,
+            seed_returns,
+            last_abs,
+            saved_h,
+            last_ts,
+            timeframe,
+            hist_mean_return=hist_mean,
+        )
+
+        pred_path.parent.mkdir(parents=True, exist_ok=True)
+        pred_path.write_text(
+            json.dumps({"predictions": preds, "forecast": forecast}, indent=2)
+        )
+
     finally:
         if lock_path.exists():
             lock_path.unlink()
-
-
-def _run(data_path, pred_path, model_path, timeframe, horizon):
-    candles = _load_real(data_path)
-    if not candles:
-        raise ValueError("No real candles found in data file")
-
-    seq_len = len(candles)
-    # Need at least horizon+1 candles (1 for input, horizon for target).
-    # Train even if quality will be poor (by design).
-    window = max(1, min(seq_len - horizon, MAX_CANDLES - horizon))
-
-    x_tensor, mins, scales = _to_tensor(candles)  # (1, seq_len, 4)
-
-    # Build training pairs: sliding windows of size `window`
-    xs, ys = [], []
-    arr = x_tensor.squeeze(0).numpy()   # (seq_len, 4)
-    for i in range(len(arr) - window - horizon + 1):
-        xs.append(arr[i : i + window])
-        # Target: open+close only for next `horizon` steps
-        target = arr[i + window : i + window + horizon, [0, 3]]  # open, close
-        ys.append(target)
-
-    if not xs:
-        # Fallback: use the whole sequence as one training sample
-        xs = [arr[:seq_len - horizon]]
-        ys = [arr[seq_len - horizon:, [0, 3]]]
-
-    X = torch.tensor(np.array(xs), dtype=torch.float32)  # (N, window, 4)
-    Y = torch.tensor(np.array(ys), dtype=torch.float32)  # (N, horizon, 2)
-
-    input_size = X.shape[2]
-    model = CandleLSTM(input_size=input_size, hidden_size=HIDDEN_SIZE,
-                       num_layers=NUM_LAYERS, horizon=horizon)
-    optimiser = torch.optim.Adam(model.parameters(), lr=LR)
-    loss_fn   = nn.MSELoss()
-
-    model.train()
-    for _ in range(EPOCHS):
-        optimiser.zero_grad()
-        pred = model(X)
-        loss = loss_fn(pred, Y)
-        loss.backward()
-        optimiser.step()
-
-    # Save model
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({
-        "state_dict": model.state_dict(),
-        "mins":       mins.tolist(),
-        "scales":     scales.tolist(),
-        "window":     window,
-        "horizon":    horizon,
-        "input_size": input_size,
-    }, model_path)
-
-    _predict_and_save(model, candles, arr, mins, scales, window,
-                      horizon, pred_path, timeframe)
-
-
-def _run_inference(data_path, pred_path, model_path, timeframe, horizon):
-    if not model_path.exists():
-        raise FileNotFoundError(f"No model found at {model_path} — run REGEN first")
-
-    candles = _load_real(data_path)
-    if not candles:
-        raise ValueError("No real candles found in data file")
-
-    checkpoint = torch.load(model_path, weights_only=True)
-    mins       = np.array(checkpoint["mins"],    dtype=np.float32)
-    scales     = np.array(checkpoint["scales"],  dtype=np.float32)
-    window     = checkpoint["window"]
-    saved_h    = checkpoint["horizon"]
-    input_size = checkpoint["input_size"]
-
-    model = CandleLSTM(input_size=input_size, hidden_size=HIDDEN_SIZE,
-                       num_layers=NUM_LAYERS, horizon=saved_h)
-    model.load_state_dict(checkpoint["state_dict"])
-
-    arr = np.array(
-        [[float(c[f]) for f in FEATURES] for c in candles],
-        dtype=np.float32,
-    )
-    normed = (arr - mins) / scales
-
-    _predict_and_save(model, candles, normed, mins, scales, window,
-                      saved_h, pred_path, timeframe)
-
-
-def _predict_and_save(model, candles, normed_arr, mins, scales,
-                      window, horizon, pred_path, timeframe):
-    """Run inference on the last `window` candles and write pred_path."""
-    model.eval()
-    seq = normed_arr[-window:]             # (window, 4)
-    x   = torch.tensor(seq, dtype=torch.float32).unsqueeze(0)  # (1, window, 4)
-
-    with torch.no_grad():
-        raw = model(x).squeeze(0).numpy()  # (horizon, 2)  — open, close (normalised)
-
-    last_ts   = int(candles[-1]["candle_close_timestamp"])
-    timestamps = _next_timestamps(last_ts, horizon, timeframe)
-
-    preds = []
-    for i, ts in enumerate(timestamps):
-        o = _denorm(raw[i, 0], mins[0], scales[0])   # open
-        c = _denorm(raw[i, 1], mins[3], scales[3])   # close
-        h = max(o, c)
-        l = min(o, c)
-        preds.append({
-            "candle_close_timestamp": str(ts),
-            "open":  str(o),
-            "high":  str(h),
-            "low":   str(l),
-            "close": str(c),
-            "fake":  "true",
-        })
-
-    pred_path.parent.mkdir(parents=True, exist_ok=True)
-    pred_path.write_text(json.dumps(preds, indent=2))

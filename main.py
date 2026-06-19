@@ -232,11 +232,19 @@ def read_candles(path: str | Path) -> list[dict] | None:
         return None
     return json.loads(p.read_text())
 
-def read_preds(user_id: int, symbol: str, timeframe: str) -> list[dict]:
+def read_preds(user_id: int, symbol: str, timeframe: str) -> tuple[list[dict], dict]:
+    """Returns (prediction_candles, forecast_dict).
+    forecast_dict has shape {"upper": [{ts, value}...], "lower": [...]}
+    """
     p = pred_path(user_id, symbol, timeframe)
     if not p.exists():
-        return []
-    return json.loads(p.read_text())
+        return [], {"upper": [], "lower": []}
+    raw = json.loads(p.read_text())
+    # New format: {"predictions": [...], "forecast": {...}}
+    if isinstance(raw, dict) and "predictions" in raw:
+        return raw["predictions"], raw.get("forecast", {"upper": [], "lower": []})
+    # Legacy format: plain list of candles
+    return raw, {"upper": [], "lower": []}
 
 
 # ---------------------------------------------------------------------------
@@ -734,8 +742,8 @@ def chart_ep(
         if row and row[1]:
             candles = read_candles(row[1])
             if candles:
-                preds = read_preds(user_id, index.upper(), time)
-                return {"status": "success", "data": {"data": candles + preds, "forecast": []}}
+                preds, forecast = read_preds(user_id, index.upper(), time)
+                return {"status": "success", "data": {"data": candles + preds, "forecast": forecast}}
 
         # No file — try fetching from AV if key provided
         key = api_key
