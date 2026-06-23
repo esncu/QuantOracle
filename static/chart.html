@@ -41,10 +41,10 @@
                 <div class="p-4 has-background-white-bis">
                     <div class="buttons" style="gap:8px;">
                         <button id="refreshBtn" class="button is-info" style="flex:1" onclick="doRefresh()">
-                            Refresh Data <span class="is-size-7 ml-1 has-text-weight-normal">(reuse model)</span>
+                            Refresh Data <span class="is-size-7 ml-1 has-text-weight-normal">(append new data, reuse model)</span>
                         </button>
                         <button id="regenBtn" class="button is-warning" style="flex:1" onclick="doRegen()">
-                            Retrain Model <span class="is-size-7 ml-1 has-text-weight-normal">(full rebuild)</span>
+                            Retrain Model <span class="is-size-7 ml-1 has-text-weight-normal">(same data, new model)</span>
                         </button>
                     </div>
                     <p id="actionStatus" class="is-size-7 has-text-grey mt-2" style="min-height:18px;"></p>
@@ -61,6 +61,7 @@
     <script>
         const params   = new URLSearchParams(window.location.search);
         const session  = params.get('session');
+        if (!session) { window.location.href = 'login.html'; }
         const index    = params.get('index')   || '';
         const time     = params.get('time')    || '';
         const dash_id  = params.get('dash_id') || '';
@@ -85,6 +86,10 @@
                     `/api/chart/?session=${session}&action=GET&index=${encodeURIComponent(index)}&time=${encodeURIComponent(time)}${didParam}${keyParam}`,
                     { method: 'POST' }
                 );
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = 'login.html';
+                    return;
+                }
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 payload = await res.json();
             } catch (err) {
@@ -110,9 +115,9 @@
                     open:  o, high: parseFloat(d.high),
                     low:   parseFloat(d.low), close: cl,
                     ...(isFake ? {
-                        color:       cl >= o ? '#b04fff' : '#7c00e0',
-                        wickColor:   cl >= o ? '#b04fff' : '#7c00e0',
-                        borderColor: cl >= o ? '#b04fff' : '#7c00e0',
+                        color:       cl >= o ? '#FFD700' : '#7c00e0',  // gold up, purple down
+                        wickColor:   cl >= o ? '#FFD700' : '#7c00e0',
+                        borderColor: cl >= o ? '#FFD700' : '#7c00e0',
                     } : {}),
                 };
             });
@@ -248,6 +253,10 @@
                     { method: 'POST' }
                 );
                 const data = await res.json();
+                if (res.status === 401 || res.status === 403) {
+                    window.location.href = 'login.html';
+                    return;
+                }
                 if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
                 if (data.status === 'pending') {
                     setActionStatus('Task started - checking in 10s…');
@@ -278,12 +287,19 @@
                 const tmpl = doc.querySelector('#topbar-template');
                 if (!tmpl) throw new Error('template tag missing');
                 document.getElementById('topbar-container').appendChild(tmpl.content.cloneNode(true));
+                const _home = document.getElementById('topbar-home-link');
+                if (_home) _home.href = `dashboard.html?session=${session}`;
+                const _out = document.getElementById('topbar-logout-link');
+                if (_out) _out.href = 'login.html';
             } catch {
                 document.getElementById('topbar-container').innerHTML = `
                     <nav class="navbar is-dark">
                         <div class="container">
-                            <div class="navbar-brand"><span class="navbar-item">QuantOracle</span></div>
-                            <div class="navbar-end"><a class="navbar-item" href="login.html">Logout</a></div>
+                            <div class="navbar-brand"><span class="navbar-item has-text-white has-text-weight-bold">QuantOracle</span></div>
+                            <div class="navbar-end">
+                                <a class="navbar-item has-text-white" href="dashboard.html?session=${session}">Dashboard</a>
+                                <a class="navbar-item has-text-white" href="login.html">Log out</a>
+                            </div>
                         </div>
                     </nav>`;
             }

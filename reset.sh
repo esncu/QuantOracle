@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# ---------------------------------------------------------------------------
-# Wipes the QuantOracle container and its data volume so the next
-# launch_linux.sh run re-creates everything from init.sql.
-#
-# USE WITH CAUTION — all Postgres data will be lost.
-# ---------------------------------------------------------------------------
 set -e
 
 echo "Stopping container (if running)..."

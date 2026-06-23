@@ -1,8 +1,3 @@
-# ---------------------------------------------------------------------------
-# Wipes the QuantOracle container and volume so the next launch re-creates
-# everything from init.sql. ALL DATA WILL BE LOST.
-# ---------------------------------------------------------------------------
-
 $Container = "QuantOracle"
 $Volume    = "QuantOracleData"
 

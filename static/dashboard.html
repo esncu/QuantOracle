@@ -65,6 +65,12 @@
         </div>
     </section>
 
+    <script>
+        // Boot to login immediately if no session in URL
+        if (!new URLSearchParams(window.location.search).get('session')) {
+            window.location.href = 'login.html';
+        }
+    </script>
     <script src="dashboard.js"></script>
     <script>
         async function insertTopbar() {
@@ -76,6 +82,10 @@
                 const tmpl = doc.querySelector('#topbar-template');
                 if (!tmpl) throw new Error('no template tag');
                 document.getElementById('topbar-container').appendChild(tmpl.content.cloneNode(true));
+                const _home = document.getElementById('topbar-home-link');
+                if (_home) _home.href = `dashboard.html?session=${session}`;
+                const _out = document.getElementById('topbar-logout-link');
+                if (_out) _out.href = 'login.html';
             } catch (e) { console.warn('Topbar:', e); }
         }
         insertTopbar();

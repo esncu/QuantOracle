@@ -18,18 +18,18 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
-# Config — swap these out for real values before production
+# Config — swap these out for real values
 # ---------------------------------------------------------------------------
-SMTP_HOST     = "smtp.gmail.com"
-SMTP_PORT     = 587
-SMTP_USER     = "your@gmail.com"
-SMTP_PASSWORD = "your_app_password"
-SMTP_FROM     = "QuantOracle <your@gmail.com>"
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_USER = "name@gmail.com"
+SMTP_PASSWORD = "APP PASSWORD HERE"
+SMTP_FROM = "QuantOracle <name@gmail.com>"
 
-DATA_ROOT = Path("data")   # ./data/{user_id}/{symbol}/{timeframe}.json
+DATA_ROOT = Path("data")  # ./data/{user_id}/{symbol}/{timeframe}.json
 
-SESSION_TTL_MINUTES  = 30   # refreshed on every authenticated action
-RECOVERY_TTL_MINUTES = 30   # one-time OTP window
+SESSION_TTL_MINUTES = 30  # refreshed on every authed action
+RECOVERY_TTL_MINUTES = 30  # one-time OTP window
 
 app = FastAPI()
 api = APIRouter(prefix="/api")
@@ -39,12 +39,15 @@ api = APIRouter(prefix="/api")
 # DB
 # ---------------------------------------------------------------------------
 
+
 @contextmanager
 def get_conn():
     conn = psycopg2.connect(
-        host="localhost", port=5432,
+        host="localhost",
+        port=5432,
         database="stocks",
-        user="backend_user", password="user123",
+        user="backend_user",
+        password="user123",
     )
     try:
         yield conn
@@ -56,8 +59,10 @@ def get_conn():
 # Password helpers
 # ---------------------------------------------------------------------------
 
+
 def _hash(password: str) -> str:
     return bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt()).decode()
+
 
 def _verify(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode()[:72], hashed.encode())
@@ -67,11 +72,14 @@ def _verify(password: str, hashed: str) -> bool:
 # Session helpers
 # ---------------------------------------------------------------------------
 
+
 def _new_expiry(minutes: int = SESSION_TTL_MINUTES) -> datetime:
     return datetime.now(timezone.utc) + timedelta(minutes=minutes)
 
+
 def _refresh_session(session_id: str, conn=None) -> None:
     """Push expires_at forward by SESSION_TTL_MINUTES from now."""
+
     def _do(c):
         with c.cursor() as cur:
             cur.execute(
@@ -79,11 +87,13 @@ def _refresh_session(session_id: str, conn=None) -> None:
                 (_new_expiry(), session_id),
             )
         c.commit()
+
     if conn:
         _do(conn)
     else:
         with get_conn() as c:
             _do(c)
+
 
 def validate_session(session_id: str, refresh: bool = True) -> int:
     """Return user_id (positive) for a valid NORMAL user session."""
@@ -104,6 +114,7 @@ def validate_session(session_id: str, refresh: bool = True) -> int:
         if refresh:
             _refresh_session(session_id, conn)
     return user_id
+
 
 def validate_admin_session(session_id: str, refresh: bool = True) -> int:
     """Return admin_id for a valid admin session."""
@@ -135,11 +146,12 @@ def validate_admin_session(session_id: str, refresh: bool = True) -> int:
 # Email
 # ---------------------------------------------------------------------------
 
+
 def send_email(to: str, subject: str, body: str) -> None:
     msg = MIMEText(body)
     msg["Subject"] = subject
-    msg["From"]    = SMTP_FROM
-    msg["To"]      = to
+    msg["From"] = SMTP_FROM
+    msg["To"] = to
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
         s.starttls()
         s.login(SMTP_USER, SMTP_PASSWORD)
@@ -152,11 +164,12 @@ def send_email(to: str, subject: str, body: str) -> None:
 
 # AlphaVantage function + response key per timeframe
 _AV_CONFIG = {
-    "5M":  ("TIME_SERIES_INTRADAY", "Time Series (5min)",  "&interval=5min"),
-    "1H":  ("TIME_SERIES_INTRADAY", "Time Series (60min)", "&interval=60min"),
-    "1D":  ("TIME_SERIES_DAILY",    "Time Series (Daily)", ""),
-    "1W":  ("TIME_SERIES_WEEKLY",   "Weekly Time Series",  ""),
+    "5M": ("TIME_SERIES_INTRADAY", "Time Series (5min)", "&interval=5min"),
+    "1H": ("TIME_SERIES_INTRADAY", "Time Series (60min)", "&interval=60min"),
+    "1D": ("TIME_SERIES_DAILY", "Time Series (Daily)", ""),
+    "1W": ("TIME_SERIES_WEEKLY", "Weekly Time Series", ""),
 }
+
 
 def fetch_av(symbol: str, timeframe: str, api_key: str) -> dict:
     """Fetch compact OHLC data from AlphaVantage for any supported timeframe."""
@@ -170,12 +183,17 @@ def fetch_av(symbol: str, timeframe: str, api_key: str) -> dict:
         f"&outputsize=compact&apikey={api_key}{extra_params}"
     )
     raw = requests.get(url, timeout=15).json()
-    if raw.get("Note"):          raise ValueError(f"API rate limit: {raw['Note']}")
-    if raw.get("Information"):   raise ValueError(raw["Information"])
-    if raw.get("Error Message"): raise ValueError(raw["Error Message"])
+    if raw.get("Note"):
+        raise ValueError(f"API rate limit: {raw['Note']}")
+    if raw.get("Information"):
+        raise ValueError(raw["Information"])
+    if raw.get("Error Message"):
+        raise ValueError(raw["Error Message"])
     series = raw.get(series_key, {})
     if not series:
-        raise ValueError(f"No data returned for {symbol} [{timeframe}] — check symbol and API key")
+        raise ValueError(
+            f"No data returned for {symbol} [{timeframe}] — check symbol and API key"
+        )
     return series
 
 
@@ -187,18 +205,18 @@ def series_to_candles(series: dict) -> list[dict]:
         # Intraday:      "2026-06-05 09:30:00"
         fmt = "%Y-%m-%d %H:%M:%S" if " " in date_str else "%Y-%m-%d"
         ts = int(
-            datetime.strptime(date_str, fmt)
-            .replace(tzinfo=timezone.utc)
-            .timestamp()
+            datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc).timestamp()
         )
-        candles.append({
-            "candle_close_timestamp": str(ts),
-            "open":  ohlc["1. open"],
-            "high":  ohlc["2. high"],
-            "low":   ohlc["3. low"],
-            "close": ohlc["4. close"],
-            "fake":  "false",
-        })
+        candles.append(
+            {
+                "candle_close_timestamp": str(ts),
+                "open": ohlc["1. open"],
+                "high": ohlc["2. high"],
+                "low": ohlc["3. low"],
+                "close": ohlc["4. close"],
+                "fake": "false",
+            }
+        )
     return candles
 
 
@@ -208,29 +226,38 @@ def series_to_candles(series: dict) -> list[dict]:
 # pred_path: data/{user_id}/{SYMBOL}/{timeframe}_preds.json  (ML, future)
 # ---------------------------------------------------------------------------
 
+
 def data_path(user_id: int, symbol: str, timeframe: str) -> Path:
     return DATA_ROOT / str(user_id) / symbol / f"{timeframe}.json"
+
 
 def pred_path(user_id: int, symbol: str, timeframe: str) -> Path:
     return DATA_ROOT / str(user_id) / symbol / f"{timeframe}_preds.json"
 
+
 def model_path(user_id: int, symbol: str, timeframe: str) -> Path:
     return DATA_ROOT / str(user_id) / symbol / f"{timeframe}_model.pt"
+
 
 def lock_path(user_id: int, symbol: str, timeframe: str) -> Path:
     return DATA_ROOT / str(user_id) / symbol / f"{timeframe}.lock"
 
-def write_candles(user_id: int, symbol: str, timeframe: str, candles: list[dict]) -> Path:
+
+def write_candles(
+    user_id: int, symbol: str, timeframe: str, candles: list[dict]
+) -> Path:
     p = data_path(user_id, symbol, timeframe)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(candles, indent=2))
     return p
+
 
 def read_candles(path: str | Path) -> list[dict] | None:
     p = Path(path)
     if not p.exists():
         return None
     return json.loads(p.read_text())
+
 
 def read_preds(user_id: int, symbol: str, timeframe: str) -> tuple[list[dict], dict]:
     """Returns (prediction_candles, forecast_dict).
@@ -251,13 +278,16 @@ def read_preds(user_id: int, symbol: str, timeframe: str) -> tuple[list[dict], d
 # Pydantic models
 # ---------------------------------------------------------------------------
 
+
 class UserAuth(BaseModel):
     username: str
     password: str
-    email: str | None = None   # required for register, ignored on login
+    email: str | None = None  # required for register, ignored on login
+
 
 class RecoveryRequest(BaseModel):
     email: str
+
 
 class RecoveryConfirm(BaseModel):
     session_id: str
@@ -269,6 +299,7 @@ class RecoveryConfirm(BaseModel):
 # Auth endpoints
 # ---------------------------------------------------------------------------
 
+
 @api.post("/register")
 def api_register(auth: UserAuth):
     if not auth.email:
@@ -278,7 +309,11 @@ def api_register(auth: UserAuth):
             with conn.cursor() as cur:
                 cur.execute(
                     "INSERT INTO users (email, name, pass_hash) VALUES (%s, %s, %s)",
-                    (auth.email.lower().strip(), auth.username.strip(), _hash(auth.password)),
+                    (
+                        auth.email.lower().strip(),
+                        auth.username.strip(),
+                        _hash(auth.password),
+                    ),
                 )
             conn.commit()
     except Exception as exc:
@@ -290,7 +325,9 @@ def api_register(auth: UserAuth):
 def api_login(auth: UserAuth):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, pass_hash FROM users WHERE name = %s", (auth.username,))
+            cur.execute(
+                "SELECT id, pass_hash FROM users WHERE name = %s", (auth.username,)
+            )
             row = cur.fetchone()
         if not row or not _verify(auth.password, row[1]):
             raise HTTPException(401, "Invalid username or password")
@@ -308,7 +345,9 @@ def api_login(auth: UserAuth):
 def api_admin_login(auth: UserAuth):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, pass_hash FROM admin WHERE name = %s", (auth.username,))
+            cur.execute(
+                "SELECT id, pass_hash FROM admin WHERE name = %s", (auth.username,)
+            )
             row = cur.fetchone()
         if not row or not _verify(auth.password, row[1]):
             raise HTTPException(401, "Invalid admin credentials")
@@ -327,11 +366,16 @@ def api_recover_request(body: RecoveryRequest):
     """Send a 6-digit OTP to the user's email and create a RECOVERY session."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE email = %s", (body.email.lower().strip(),))
+            cur.execute(
+                "SELECT id FROM users WHERE email = %s", (body.email.lower().strip(),)
+            )
             row = cur.fetchone()
         if not row:
             # Don't reveal whether email exists
-            return {"status": "success", "message": "If that email exists, a code was sent"}
+            return {
+                "status": "success",
+                "message": "If that email exists, a code was sent",
+            }
         user_id = row[0]
         otp = "".join(random.choices(string.digits, k=6))
         sid = str(uuid.uuid4())
@@ -357,7 +401,11 @@ def api_recover_request(body: RecoveryRequest):
                 cur.execute("DELETE FROM session WHERE id = %s", (sid,))
             conn.commit()
         raise HTTPException(500, f"Failed to send recovery email: {exc}")
-    return {"status": "success", "message": "If that email exists, a code was sent", "session_id": sid}
+    return {
+        "status": "success",
+        "message": "If that email exists, a code was sent",
+        "session_id": sid,
+    }
 
 
 @api.post("/recover/confirm")
@@ -406,15 +454,16 @@ def api_recover_confirm(body: RecoveryConfirm):
 #   DELETE    — admin hard-deletes a data entry
 # ---------------------------------------------------------------------------
 
+
 @api.post("/dashboard/")
 def dashboard_ep(
-    session:  str,
-    action:   str,
-    dash_id:  int | None = None,
-    name:     str | None = None,
-    index:    str | None = None,
-    time:     str | None = None,
-    api_key:  str | None = None,
+    session: str,
+    action: str,
+    dash_id: int | None = None,
+    name: str | None = None,
+    index: str | None = None,
+    time: str | None = None,
+    api_key: str | None = None,
 ):
     user_id = validate_session(session)
 
@@ -441,7 +490,7 @@ def dashboard_ep(
                     symbols: dict[str, dict] = {}
                     for eid, sym, tf, dpath, edel in entries:
                         if edel:
-                            continue   # hide flagged entries from user view
+                            continue  # hide flagged entries from user view
                         if sym not in symbols:
                             symbols[sym] = {
                                 "5M": {"id": None, "ready": False, "deleted": False},
@@ -460,16 +509,18 @@ def dashboard_ep(
                             else:
                                 state = "empty"
                             symbols[sym][tf] = {
-                                "id":      eid,
-                                "state":   state,
+                                "id": eid,
+                                "state": state,
                                 "deleted": edel,
                             }
-                    result.append({
-                        "id":       did,
-                        "name":     dname,
-                        "deleted":  ddel,
-                        "symbols":  symbols,
-                    })
+                    result.append(
+                        {
+                            "id": did,
+                            "name": dname,
+                            "deleted": ddel,
+                            "symbols": symbols,
+                        }
+                    )
         return {"status": "success", "data": result}
 
     # ---- CREATE ------------------------------------------------------------
@@ -520,9 +571,9 @@ def dashboard_ep(
         fpath = None
         if api_key:
             try:
-                series  = fetch_av(index.upper(), time or "1D", api_key)
+                series = fetch_av(index.upper(), time or "1D", api_key)
                 candles = series_to_candles(series)
-                fpath   = write_candles(user_id, index.upper(), time, candles)
+                fpath = write_candles(user_id, index.upper(), time, candles)
             except ValueError as exc:
                 raise HTTPException(502, str(exc))
             except Exception as exc:
@@ -581,9 +632,9 @@ def dashboard_ep(
         if not row:
             raise HTTPException(404, f"No entry for {index} [{time}] in that dashboard")
         try:
-            series  = fetch_av(index.upper(), time or "1D", api_key)
+            series = fetch_av(index.upper(), time or "1D", api_key)
             candles = series_to_candles(series)
-            fpath   = write_candles(user_id, index.upper(), time, candles)
+            fpath = write_candles(user_id, index.upper(), time, candles)
         except ValueError as exc:
             raise HTTPException(502, str(exc))
         except Exception as exc:
@@ -681,15 +732,16 @@ def dashboard_ep(
 #   PULL  — sessionless proxy, key supplied by caller, nothing stored
 # ---------------------------------------------------------------------------
 
+
 @api.post("/chart/")
 def chart_ep(
     background_tasks: BackgroundTasks,
-    session:  str,
-    action:   str,
-    index:    str | None = None,
-    time:     str | None = None,
-    dash_id:  int | None = None,
-    api_key:  str | None = None,
+    session: str,
+    action: str,
+    index: str | None = None,
+    time: str | None = None,
+    dash_id: int | None = None,
+    api_key: str | None = None,
 ):
     # PULL is sessionless
     if action == "PULL":
@@ -699,7 +751,7 @@ def chart_ep(
             raise HTTPException(400, "api_key is required for PULL")
         pull_time = time or "1D"
         try:
-            series  = fetch_av(index.upper(), pull_time, api_key)
+            series = fetch_av(index.upper(), pull_time, api_key)
             candles = series_to_candles(series)
         except ValueError as exc:
             raise HTTPException(502, str(exc))
@@ -743,15 +795,18 @@ def chart_ep(
             candles = read_candles(row[1])
             if candles:
                 preds, forecast = read_preds(user_id, index.upper(), time)
-                return {"status": "success", "data": {"data": candles + preds, "forecast": forecast}}
+                return {
+                    "status": "success",
+                    "data": {"data": candles + preds, "forecast": forecast},
+                }
 
         # No file — try fetching from AV if key provided
         key = api_key
         if key:
             try:
-                series  = fetch_av(index.upper(), time or "1D", key)
+                series = fetch_av(index.upper(), time or "1D", key)
                 candles = series_to_candles(series)
-                fpath   = write_candles(user_id, index.upper(), time, candles)
+                fpath = write_candles(user_id, index.upper(), time, candles)
                 # Update data_path in DB
                 if row:
                     with get_conn() as conn:
@@ -770,8 +825,13 @@ def chart_ep(
         # Final fallback — tempdata.txt
         tempdata = Path("tempdata.txt")
         if tempdata.exists():
-            return {"status": "success", "data": {"data": json.loads(tempdata.read_text()), "forecast": []}}
-        raise HTTPException(404, f"No data for {index} [{time}] and no API key provided")
+            return {
+                "status": "success",
+                "data": {"data": json.loads(tempdata.read_text()), "forecast": []},
+            }
+        raise HTTPException(
+            404, f"No data for {index} [{time}] and no API key provided"
+        )
 
     # ---- REFRESH -----------------------------------------------------------
     # Pull new data, append only new candles, run existing model, update preds
@@ -789,7 +849,7 @@ def chart_ep(
 
         # Pull new candles from AV
         try:
-            series   = fetch_av(index.upper(), time, api_key)
+            series = fetch_av(index.upper(), time, api_key)
             new_cands = series_to_candles(series)
         except ValueError as exc:
             raise HTTPException(502, str(exc))
@@ -798,16 +858,22 @@ def chart_ep(
 
         # Merge: keep existing real candles, append any newer ones
         existing = read_candles(row[1]) or []
-        real_existing = [c for c in existing if str(c.get("fake","false")).lower() == "false"]
-        existing_ts   = {c["candle_close_timestamp"] for c in real_existing}
-        appended      = real_existing + [c for c in new_cands if c["candle_close_timestamp"] not in existing_ts]
+        real_existing = [
+            c for c in existing if str(c.get("fake", "false")).lower() == "false"
+        ]
+        existing_ts = {c["candle_close_timestamp"] for c in real_existing}
+        appended = real_existing + [
+            c for c in new_cands if c["candle_close_timestamp"] not in existing_ts
+        ]
 
         dp = data_path(user_id, index.upper(), time)
         dp.parent.mkdir(parents=True, exist_ok=True)
         dp.write_text(json.dumps(appended, indent=2))
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE data SET data_path = %s WHERE id = %s", (str(dp), row[0]))
+                cur.execute(
+                    "UPDATE data SET data_path = %s WHERE id = %s", (str(dp), row[0])
+                )
             conn.commit()
 
         # Background: run inference with existing model
@@ -816,6 +882,7 @@ def chart_ep(
         pp = pred_path(user_id, index.upper(), time)
 
         from stockml import inference_only
+
         background_tasks.add_task(inference_only, dp, pp, mp, lp, time)
 
         return {"status": "pending", "message": "Inference started"}
@@ -823,26 +890,22 @@ def chart_ep(
     # ---- REGEN -------------------------------------------------------------
     # Pull fresh data, delete old files, train new model, generate preds
     if action == "REGEN":
-        if not api_key:
-            raise HTTPException(400, "api_key is required for REGEN")
+        # Retrain on existing data — no AV fetch, no API key needed
         if not row:
             raise HTTPException(404, f"No data entry for {index} [{time}]")
+        if not row[1] or not Path(row[1]).exists():
+            raise HTTPException(
+                400, "No local data file found — use Refresh Data first to pull data"
+            )
         lp = lock_path(user_id, index.upper(), time)
         if lp.exists():
             return {"status": "pending", "message": "Task already in progress"}
 
-        try:
-            series  = fetch_av(index.upper(), time, api_key)
-            candles = series_to_candles(series)
-        except ValueError as exc:
-            raise HTTPException(502, str(exc))
-        except Exception as exc:
-            raise HTTPException(502, f"Upstream error: {exc}")
+        fpath = Path(row[1])
+        mp = model_path(user_id, index.upper(), time)
+        pp = pred_path(user_id, index.upper(), time)
 
-        # Write fresh real data, wipe old preds and model
-        fpath = write_candles(user_id, index.upper(), time, candles)
-        mp    = model_path(user_id, index.upper(), time)
-        pp    = pred_path(user_id, index.upper(), time)
+        # Wipe old model and preds only — keep real data file
         for old_file in (mp, pp):
             if old_file.exists():
                 old_file.unlink()
@@ -850,16 +913,17 @@ def chart_ep(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE data SET data_path = %s, model_path = %s WHERE id = %s",
-                    (str(fpath), str(mp), row[0]),
+                    "UPDATE data SET model_path = %s WHERE id = %s",
+                    (str(mp), row[0]),
                 )
             conn.commit()
 
-        # Background: train new model and generate preds
+        # Background: train new model on existing data
         lp.parent.mkdir(parents=True, exist_ok=True)
         lp.touch()
 
         from stockml import train_and_predict
+
         background_tasks.add_task(train_and_predict, fpath, pp, mp, lp, time)
 
         return {"status": "pending", "message": "Training started"}
@@ -870,6 +934,7 @@ def chart_ep(
 # ---------------------------------------------------------------------------
 # Admin endpoints
 # ---------------------------------------------------------------------------
+
 
 @api.get("/admin/users")
 def admin_list_users(session: str):
@@ -896,16 +961,24 @@ def admin_list_users(session: str):
                 for did, dname, eid, sym, tf, dpath, edel in rows:
                     if did not in dashboards:
                         dashboards[did] = {"id": did, "name": dname, "data": []}
-                    dashboards[did]["data"].append({
-                        "id": eid, "symbol_name": sym, "timeframe": tf,
-                        "has_data": bool(dpath and Path(dpath).exists()),
-                        "deleted": edel,
-                    })
-                result.append({
-                    "id": uid, "email": email, "name": name,
-                    "created_at": created.isoformat(),
-                    "dashboards": list(dashboards.values()),
-                })
+                    dashboards[did]["data"].append(
+                        {
+                            "id": eid,
+                            "symbol_name": sym,
+                            "timeframe": tf,
+                            "has_data": bool(dpath and Path(dpath).exists()),
+                            "deleted": edel,
+                        }
+                    )
+                result.append(
+                    {
+                        "id": uid,
+                        "email": email,
+                        "name": name,
+                        "created_at": created.isoformat(),
+                        "dashboards": list(dashboards.values()),
+                    }
+                )
     return result
 
 

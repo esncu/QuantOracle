@@ -1,12 +1,3 @@
-# ---------------------------------------------------------------------------
-# QuantOracle launcher (Windows)
-# Mirror of launch_linux.sh — same logic, PowerShell syntax.
-#
-# First run (or after reset.ps1): creates the container and DB from init.sql.
-# Subsequent runs: starts the existing container.
-# To fully reset: run reset.ps1 first.
-# ---------------------------------------------------------------------------
-
 $Container = "QuantOracle"
 $Volume    = "QuantOracleData"
 
@@ -32,14 +23,11 @@ try {
             -d postgres | Out-Null
     }
 
-    # Wait on the default 'postgres' DB — 'stocks' is created by the entrypoint
-    # after Postgres is already up, so checking for 'stocks' can false-fail.
     Write-Host "Waiting for Postgres to be ready..."
     $ready = $false
     for ($i = 1; $i -le 60; $i++) {
         docker exec $Container pg_isready -U postgres 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) {
-            # Give the entrypoint a moment to finish running init.sql
             Start-Sleep -Seconds 3
             Write-Host "Postgres is ready."
             $ready = $true
