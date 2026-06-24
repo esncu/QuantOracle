@@ -20,6 +20,10 @@ FYP for Diploma in I.T. FYP
 - python
 - pip
 - docker-cli
+
+if Windows:
+
+- wsl2
   
 if NVIDIA GPU:
 
