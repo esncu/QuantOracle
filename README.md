@@ -5,6 +5,8 @@ FYP for Diploma in I.T. FYP
 ## Starter guide
 
 - Follow the installation guide for server [here](#install)
+- Get an email with 2FA to generate an app password, and fill in the details in main.py for password reset email
+- Get an AlphaVantage API key [here](https://www.alphavantage.co/support/#api-key)
 - Run launch_linux.sh or launch_windows.ps1 (either via terminal or double-clicking)
 - Go to <http://localhost:8000> on your browser (make sure its http and not https)
 - Check for common issues [here](#issues)
@@ -37,6 +39,7 @@ if AMD GPU:
 
 1) Follow this guide: <https://pytorch.org/get-started/locally/>
 2) run `pip install matplotlib passlib[bcrypt] fastapi[standard] psycopg2-binary requests` in your terminal
+3) `git clone https://github.com/esncu/QuantOracle` into an easily accessible location
 
 <a name="issues"></a>
 
