@@ -153,6 +153,7 @@
             const email    = document.getElementById('registerEmail').value.trim();
             const password = document.getElementById('registerPassword').value.trim();
             if (!username || !email || !password) { setMsg('loginMessage', 'Fill in all fields.', 'is-warning'); return; }
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setMsg('loginMessage', 'Please enter a valid email address.', 'is-warning'); return; }
             try {
                 await apiFetch('/api/register', { username, password, email });
                 setMsg('loginMessage', 'Registered! Logging in…', 'is-success');

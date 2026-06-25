@@ -1,28 +1,7 @@
 """
-stockml.py — LSTM-based OHLC prediction for QuantOracle
-
-Architecture: autoregressive single-step LSTM with MC Dropout
-- Trains on absolute OHLC prices (normalised per-feature to [0,1])
-- Predicts one candle at a time, feeding output back as next input
-- MC Dropout: 50 stochastic forward passes at inference
-    mean  → purple prediction candles (fake=true)
-    std   → cone bounds (upper/lower forecast lines), widens rightward
-
-Tunable parameters (top of file, no retraining needed for inference ones):
-  TEMPERATURE    — amplifies deviation from last close before feeding back;
-                   1.0 = neutral, 1.5 = more volatile, 2.0 = aggressive
-  CONE_GROWTH    — how fast the cone widens per step (additive per-step scale);
-                   0.1 = slow open, 0.3 = fast open
-  MC_SAMPLES     — number of stochastic passes; more = smoother cone, slower
-  (retraining required to change below)
-  MAX_CANDLES    — input window cap
-  HORIZON        — fraction of real candle count to predict (e.g. 0.20 = 20%)
-  MAX_HORIZON    — absolute ceiling on predicted candles
-  HIDDEN_SIZE    — LSTM capacity; higher = more expressive but slower
-  NUM_LAYERS     — LSTM depth
-  EPOCHS         — training iterations; more = better fit but slower
-  LR             — learning rate
-  DROPOUT        — dropout probability; higher = more MC variance in cone
+Autoregressive single-step LSTM with MC Dropout, 
+trains on absolute close prices, OHLC & price delta
+training seems to love clamping to mean
 """
 
 import json
@@ -32,16 +11,16 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-# ---------------------------------------------------------------------------
+
 # Tunable — inference params (no retraining needed)
 # ---------------------------------------------------------------------------
 TEMPERATURE = 1.9  # amplifies each step's deviation from previous close
 # 1.0 = flat, 1.5 = moderate, 2.5 = very aggressive
 CONE_GROWTH = 0.02  # per-step multiplier growth for the uncertainty cone
 # spread[i] = std[i] * (1 + CONE_GROWTH * i)
-MC_SAMPLES = 20  # stochastic inference passes; more = smoother bounds
+MC_SAMPLES = 20  # stochastic passes; more = smoother, less volatile
 
-# ---------------------------------------------------------------------------
+
 # Tunable — training params (require retraining to take effect)
 # ---------------------------------------------------------------------------
 MAX_CANDLES = 365
@@ -56,11 +35,6 @@ DROPOUT = 0.4  # higher = more spread in MC cone; lower = tighter cone
 FEATURES = ["open", "high", "low", "close"]
 
 
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
-
-
 class CandleLSTM(nn.Module):
     def __init__(self, dropout=DROPOUT):
         super().__init__()
@@ -72,7 +46,7 @@ class CandleLSTM(nn.Module):
             dropout=dropout if NUM_LAYERS > 1 else 0.0,
         )
         self.dropout = nn.Dropout(p=dropout)
-        self.fc = nn.Linear(HIDDEN_SIZE, 1)  # close only (normalised)
+        self.fc = nn.Linear(HIDDEN_SIZE, 1)
 
     def forward(self, x, hc=None):
         assert x.dim() == 3, f"Expected 3D input got {x.dim()}D: {x.shape}"
@@ -87,11 +61,8 @@ class CandleLSTM(nn.Module):
                 m.train()
 
 
-# ---------------------------------------------------------------------------
 # Data helpers
 # ---------------------------------------------------------------------------
-
-
 def _load_real(path: Path) -> list[dict]:
     data = json.loads(path.read_text())
     real = [c for c in data if str(c.get("fake", "false")).lower() == "false"]
@@ -128,25 +99,22 @@ def _make_input(o: float, h: float, l: float, cl: float) -> torch.Tensor:
     return torch.tensor([[[o, h, l, cl]]], dtype=torch.float32)  # (1, 1, 4)
 
 
-# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
-
-
 def _train(normed: np.ndarray, window: int, horizon: int) -> CandleLSTM:
     xs, ys = [], []
     for i in range(len(normed) - window - horizon + 1):
         xs.append(normed[i : i + window])
-        ys.append(normed[i + window : i + window + horizon, 3:4])  # close only
+        ys.append(normed[i + window : i + window + horizon, 3:4])
 
     if not xs:
         split = max(1, len(normed) - horizon)
         xs = [normed[:split]]
-        ys = [normed[split:, 3:4]]  # close only
+        ys = [normed[split:, 3:4]
         horizon = len(ys[0])
 
     X = torch.tensor(np.array(xs), dtype=torch.float32)  # (N, window, 4)
-    Y = torch.tensor(np.array(ys), dtype=torch.float32)  # (N, horizon, 1) — close only
+    Y = torch.tensor(np.array(ys), dtype=torch.float32)  # (N, horizon, 1)
 
     model = CandleLSTM()
     opt = torch.optim.Adam(model.parameters(), lr=LR)
@@ -159,11 +127,10 @@ def _train(normed: np.ndarray, window: int, horizon: int) -> CandleLSTM:
         step_input = X[:, -1:, :]  # (N, 1, 4)
         step_loss = None
 
-        # Scheduled sampling: start fully teacher-forced, end ~50% self-rolled
         teacher_ratio = max(0.5, 1.0 - epoch / EPOCHS)
 
         for t in range(horizon):
-            pred_c, hc = model(step_input, hc)  # (N, 1) — close only
+            pred_c, hc = model(step_input, hc)
             tgt = Y[:, t, :]  # (N, 1)
             sl = loss_fn(pred_c, tgt)
             step_loss = sl if step_loss is None else step_loss + sl
@@ -174,7 +141,6 @@ def _train(normed: np.ndarray, window: int, horizon: int) -> CandleLSTM:
             else:
                 c_col = pred_c[:, 0:1].detach()
 
-            # Open = this step's close (from step_input); high/low derived
             o_col = step_input[:, 0, 3:4]  # previous close as open
             h_col = torch.max(o_col, c_col)
             l_col = torch.min(o_col, c_col)
@@ -188,11 +154,8 @@ def _train(normed: np.ndarray, window: int, horizon: int) -> CandleLSTM:
     return model
 
 
-# ---------------------------------------------------------------------------
 # MC Dropout rollout
 # ---------------------------------------------------------------------------
-
-
 def _mc_rollout(
     model: CandleLSTM,
     seed_normed: np.ndarray,
@@ -220,14 +183,14 @@ def _mc_rollout(
             step_input = _make_input(*seed_normed[-1].tolist())
 
             for t in range(horizon):
-                pred_c, hc = model(step_input, hc)  # (1, 1) — close only
+                pred_c, hc = model(step_input, hc)  # (1, 1)
                 c_n = pred_c[0, 0].item()
 
                 # Temperature: amplify deviation from previous close
                 last_c_n = step_input[0, 0, 3].item()
                 c_n = last_c_n + (c_n - last_c_n) * TEMPERATURE
 
-                # Open = previous close (eliminates overlapping candles)
+                # Open = previous close
                 o_n = last_c_n
                 all_o[s, t] = o_n
                 all_c[s, t] = c_n
@@ -240,7 +203,6 @@ def _mc_rollout(
     mean_c = all_c.mean(axis=0)
     std_c = all_c.std(axis=0)
 
-    # Cone: std scaled by growth factor that widens rightward
     cone_scale = np.array(
         [1.0 + CONE_GROWTH * i for i in range(horizon)], dtype=np.float32
     )
@@ -248,7 +210,6 @@ def _mc_rollout(
 
     predictions, upper, lower = [], [], []
 
-    # Denorm closes first; open[i] = close[i-1] (last real close for i=0)
     last_real_close = _denorm(float(seed_normed[-1, 3]), mins[3], scales[3])
     denormed_closes = [
         _denorm(float(mean_c[i]), mins[3], scales[3]) for i in range(horizon)
@@ -287,11 +248,8 @@ def _mc_rollout(
     return predictions, {"upper": upper, "lower": lower}
 
 
-# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
-
 def train_and_predict(
     data_path: Path,
     pred_path: Path,
@@ -326,7 +284,7 @@ def train_and_predict(
         preds, forecast = _mc_rollout(
             model,
             normed[-window:],
-            horizon,  # computed above
+            horizon,
             mins,
             sc,
             last_ts,
@@ -362,7 +320,6 @@ def inference_only(
         mins = np.array(ck["mins"], dtype=np.float32)
         sc = np.array(ck["scales"], dtype=np.float32)
         window = ck["window"]
-        # Recompute horizon from current data length so REFRESH stays proportional
         saved_h = min(MAX_HORIZON, max(1, round(len(candles) * HORIZON)))
 
         model = CandleLSTM()

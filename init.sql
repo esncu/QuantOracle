@@ -10,7 +10,6 @@ GRANT CONNECT ON DATABASE stocks TO backend_user;
 GRANT USAGE ON SCHEMA public TO backend_user;
 GRANT CREATE ON SCHEMA public TO backend_user;
 
--- ---------------------------------------------------------------------------
 -- users
 -- ---------------------------------------------------------------------------
 CREATE TABLE users (
@@ -21,7 +20,6 @@ CREATE TABLE users (
     created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- ---------------------------------------------------------------------------
 -- admin  (single row, rubric requirement)
 -- ---------------------------------------------------------------------------
 CREATE TABLE admin (
@@ -30,7 +28,6 @@ CREATE TABLE admin (
     pass_hash VARCHAR(255) NOT NULL
 );
 
--- ---------------------------------------------------------------------------
 -- session
 --   user_id: positive = users.id, negative = -(admin.id)
 --   type:    NORMAL | RECOVERY
@@ -44,8 +41,7 @@ CREATE TABLE session (
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
--- ---------------------------------------------------------------------------
--- dashboard  (named container, e.g. "My Tech Stocks")
+-- dashboard  (named containers for stock categorization like "Tech")
 -- ---------------------------------------------------------------------------
 CREATE TABLE dashboard (
     id         SERIAL PRIMARY KEY,
@@ -56,7 +52,6 @@ CREATE TABLE dashboard (
     UNIQUE (user_id, name)
 );
 
--- ---------------------------------------------------------------------------
 -- data  (one row per symbol+timeframe inside a dashboard)
 --   data_path  → ./data/{user_id}/{symbol}/{timeframe}.json
 --   model_path → ./data/{user_id}/{symbol}/{timeframe}_model.pt  (future)
@@ -73,28 +68,26 @@ CREATE TABLE data (
     UNIQUE (dashboard_id, symbol_name, timeframe)
 );
 
+-- messages  (user feedback to admin)
 -- ---------------------------------------------------------------------------
--- settings  (global, single row)
--- ---------------------------------------------------------------------------
-CREATE TABLE settings (
-    id      SERIAL PRIMARY KEY,
-    api_key VARCHAR(255) DEFAULT ''
+CREATE TABLE messages (
+    id         SERIAL PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message    VARCHAR(1000) NOT NULL,
+    sent_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-INSERT INTO settings (api_key) VALUES ('');
 
--- ---------------------------------------------------------------------------
 -- Seed: alice (password: password123)
 -- ---------------------------------------------------------------------------
 INSERT INTO users (email, name, pass_hash) VALUES
     ('alice@example.com', 'alice', '$2b$12$L86TXWLVtMsTMd0Bko.x/eCK5Z.Ro3XLShsDhzpB5BUYIiGrjY8DO');
 
--- ---------------------------------------------------------------------------
 -- Seed: admin quoracle (password: secure)
 -- ---------------------------------------------------------------------------
 INSERT INTO admin (name, pass_hash) VALUES
     ('quoracle', '$2b$12$GKCrVkS08hxX.v59wxmKj.11ym/3OR4BONI64FkHTAoAzLiVAhow2');
 
--- ---------------------------------------------------------------------------
+
 -- Seed: two dashboards for alice
 -- ---------------------------------------------------------------------------
 INSERT INTO dashboard (user_id, name) VALUES

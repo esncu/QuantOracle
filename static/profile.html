@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantOracle | Profile</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+</head>
+<body class="has-background-light">
+    <div id="topbar-container"></div>
+
+    <section class="section">
+        <div class="container">
+            <div class="columns is-centered">
+                <div class="column is-5">
+                    <div class="box">
+                        <h1 class="title is-4 mb-4">Profile</h1>
+                        <div id="profileMsg" class="notification is-hidden mb-4"></div>
+
+                        <div class="field">
+                            <label class="label">Username</label>
+                            <div class="control">
+                                <input id="displayUsername" class="input" type="text" readonly
+                                    style="background:#f5f5f5; cursor:default;">
+                            </div>
+                        </div>
+
+                        <div class="field">
+                            <label class="label">Email</label>
+                            <div class="control">
+                                <input id="displayEmail" class="input" type="text" readonly
+                                    style="background:#f5f5f5; cursor:default;">
+                            </div>
+                        </div>
+
+                        <hr>
+                        <h2 class="subtitle is-6 mb-3">Change Email</h2>
+
+                        <div class="field">
+                            <label class="label">New Email</label>
+                            <div class="control">
+                                <input id="newEmail" class="input" type="email"
+                                    placeholder="new@email.com">
+                            </div>
+                        </div>
+                        <div class="field">
+                            <div class="control">
+                                <button class="button is-primary" onclick="changeEmail()">
+                                    Confirm Change
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        const params  = new URLSearchParams(window.location.search);
+        const session = params.get('session');
+        if (!session) window.location.href = 'login.html';
+
+        function setMsg(text, type = 'is-info') {
+            const el = document.getElementById('profileMsg');
+            el.className = `notification ${type}`;
+            el.textContent = text;
+            el.classList.remove('is-hidden');
+        }
+
+        async function loadProfile() {
+            try {
+                const res  = await fetch(`/api/user/profile?session=${session}`);
+                if (res.status === 401 || res.status === 403) { window.location.href = 'login.html'; return; }
+                const data = await res.json();
+                document.getElementById('displayUsername').value = data.username;
+                document.getElementById('displayEmail').value    = data.email;
+            } catch (e) {
+                setMsg(`Failed to load profile: ${e.message}`, 'is-danger');
+            }
+        }
+
+        async function changeEmail() {
+            const newEmail = document.getElementById('newEmail').value.trim();
+            if (!newEmail) { setMsg('Please enter a new email.', 'is-warning'); return; }
+
+            // Client-side format check
+            const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRe.test(newEmail)) {
+                setMsg('Please enter a valid email address.', 'is-warning');
+                return;
+            }
+
+            try {
+                const res  = await fetch(
+                    `/api/user/email_change?session=${session}&new_email=${encodeURIComponent(newEmail)}`,
+                    { method: 'POST' }
+                );
+                const data = await res.json();
+                if (!res.ok) {
+                    const code = data.detail;
+                    if (code === '1') setMsg('That email is already taken.', 'is-danger');
+                    else              setMsg('Failed to change email. Please try again.', 'is-danger');
+                    return;
+                }
+                setMsg('Email updated successfully.', 'is-success');
+                document.getElementById('displayEmail').value = newEmail;
+                document.getElementById('newEmail').value     = '';
+            } catch (e) {
+                setMsg(`Network error: ${e.message}`, 'is-danger');
+            }
+        }
+
+        // Enter key on email field
+        document.addEventListener('DOMContentLoaded', () => {
+            loadProfile();
+            document.getElementById('newEmail').addEventListener('keydown', e => {
+                if (e.key === 'Enter') changeEmail();
+            });
+        });
+
+        async function insertTopbar() {
+            try {
+                const resp = await fetch('template.html');
+                if (!resp.ok) throw new Error('no template');
+                const html = await resp.text();
+                const doc  = new DOMParser().parseFromString(html, 'text/html');
+                const tmpl = doc.querySelector('#topbar-template');
+                if (!tmpl) throw new Error('no template tag');
+                document.getElementById('topbar-container').appendChild(tmpl.content.cloneNode(true));
+                const _home = document.getElementById('topbar-home-link');
+                if (_home) _home.href = `dashboard.html?session=${session}`;
+                const _prof = document.getElementById('topbar-profile-link');
+                if (_prof) _prof.href = `profile.html?session=${session}`;
+                const _out = document.getElementById('topbar-logout-link');
+                if (_out) _out.href = 'login.html';
+            } catch (e) {
+                console.warn('Topbar:', e);
+                document.getElementById('topbar-container').innerHTML = `
+                    <nav class="navbar is-dark">
+                        <div class="container">
+                            <div class="navbar-brand"><span class="navbar-item has-text-white has-text-weight-bold">QuantOracle</span></div>
+                            <div class="navbar-end">
+                                <a class="navbar-item has-text-white" href="dashboard.html?session=${session}">Dashboard</a>
+                                <a class="navbar-item has-text-white" href="profile.html?session=${session}">Profile</a>
+                                <a class="navbar-item has-text-white" href="login.html">Log out</a>
+                            </div>
+                        </div>
+                    </nav>`;
+            }
+        }
+        insertTopbar();
+    </script>
+</body>
+</html>

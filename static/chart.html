@@ -71,13 +71,11 @@
         document.getElementById('indexTitle').innerText = index || 'No Index';
         document.getElementById('timeTitle').innerText  = `Timeframe: ${time || 'N/A'}`;
 
-        // ----------------------------------------------------------------
         // Chart
         // ----------------------------------------------------------------
         async function loadChart() {
             let payload;
             try {
-                // FIX: relative URL, correct index+time from params
                 const apiKey  = localStorage.getItem(LS_KEY) || '';
                 const savedKey = document.getElementById('chartApiKey')?.value.trim() || apiKey;
                 const keyParam = savedKey ? `&api_key=${encodeURIComponent(savedKey)}` : '';
@@ -136,7 +134,6 @@
             });
             series.setData(candles);
 
-            // Purple background behind prediction candles using a Histogram overlay
             const fakeCandles = rawCandles.filter(d => d.fake === "true");
             if (fakeCandles.length) {
                 try {
@@ -151,10 +148,9 @@
                         time:  parseInt(d.candle_close_timestamp, 10),
                         value: 1e10,
                     })));
-                } catch(_) { /* older LightweightCharts — skip background */ }
+                } catch(_) { /* skip background */ }
             }
 
-            // Forecast cone — upper (green) and lower (red) LineSeries
             const forecastData = payload.data?.forecast;
             if (forecastData?.upper?.length && forecastData?.lower?.length) {
                 const toLineData = arr => arr.map(d => ({
@@ -188,7 +184,6 @@
 
         loadChart();
 
-        // ----------------------------------------------------------------
         // Poll for pending tasks (REGEN/REFRESH running in background)
         // ----------------------------------------------------------------
         let _pollInterval = null;
@@ -219,7 +214,6 @@
                         return;
                     }
                 } catch(_) {}
-                // Reset countdown for next poll
                 countdown = 10;
             }
 
@@ -231,7 +225,6 @@
             }, 1000);
         }
 
-        // ----------------------------------------------------------------
         // Refresh / Regen actions
         // ----------------------------------------------------------------
         function setActionStatus(msg, isErr=false) {
@@ -275,7 +268,6 @@
         function doRefresh() { chartAction('REFRESH'); }
         function doRegen()   { chartAction('REGEN');   }
 
-        // ----------------------------------------------------------------
         // Topbar
         // ----------------------------------------------------------------
         async function insertTopbar() {
@@ -306,8 +298,7 @@
         }
         insertTopbar();
 
-        // ----------------------------------------------------------------
-        // Guide popup  — FIX: inverted toggle logic
+        // Guide popup
         // ----------------------------------------------------------------
         let guideOpen = false;
         document.querySelectorAll('.guideBtn').forEach(btn => {
@@ -317,7 +308,6 @@
             });
         });
 
-        // Autoload + autosave API key using per-user key
         const _savedKey = localStorage.getItem(LS_KEY);
         if (_savedKey) document.getElementById('chartApiKey').value = _savedKey;
         document.getElementById('chartApiKey').addEventListener('change', () => {

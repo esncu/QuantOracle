@@ -6,11 +6,13 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
-        .user-card   { border-left: 4px solid #3273dc; margin-bottom: 1.5rem; }
-        .dash-card   { border-left: 3px solid #aab; margin: 8px 0 8px 16px; padding: 8px 12px; background:#f9f9f9; border-radius:4px; }
-        .data-row    { margin: 4px 0 4px 12px; padding: 6px 10px; background:#fff; border:1px solid #eee; border-radius:4px; }
-        .flagged-row { background:#fff3cd; border-left:3px solid #ff6b6b; }
-        .badge       { background:#e8e8e8; padding:2px 6px; border-radius:3px; font-size:0.8rem; margin-left:6px; }
+        .user-card    { border-left: 4px solid #3273dc; margin-bottom: 1.5rem; }
+        .dash-card    { border-left: 3px solid #aab; margin: 8px 0 8px 16px; padding: 8px 12px; background:#f9f9f9; border-radius:4px; }
+        .dash-flagged { border-left: 3px solid #ff6b6b; background:#fff3cd; }
+        .data-row     { margin: 4px 0 4px 12px; padding: 6px 10px; background:#fff; border:1px solid #eee; border-radius:4px; }
+        .flagged-row  { background:#fff3cd; border-left:3px solid #ff6b6b; }
+        .badge        { background:#e8e8e8; padding:2px 6px; border-radius:3px; font-size:0.8rem; margin-left:6px; }
+        .feedback-card { border-left: 4px solid #48c78e; margin-bottom: 1rem; }
     </style>
 </head>
 <body class="has-background-light p-5">
@@ -24,63 +26,108 @@
     <div class="container" style="max-width:960px;">
         <h1 class="title mb-4">Admin Space</h1>
 
-        <div class="field has-addons mb-4">
-            <div class="control is-expanded">
-                <input class="input" type="text" id="searchInput" placeholder="Search by username…"
-                    onkeyup="if(event.key==='Enter') render()">
+        <!-- Tab switcher -->
+        <div class="tabs mb-4">
+            <ul>
+                <li id="tabUsers" class="is-active"><a onclick="switchTab('users')">Users</a></li>
+                <li id="tabFeedback"><a onclick="switchTab('feedback')">Feedback <span id="feedbackBadge" class="badge ml-1" style="display:none"></span></a></li>
+            </ul>
+        </div>
+
+        <!-- Users tab -->
+        <div id="panelUsers">
+            <div class="field has-addons mb-4">
+                <div class="control is-expanded">
+                    <input class="input" type="text" id="searchInput" placeholder="Search by username…"
+                        onkeyup="if(event.key==='Enter') renderUsers()">
+                </div>
+                <div class="control"><button class="button is-info" onclick="renderUsers()">Search</button></div>
             </div>
-            <div class="control"><button class="button is-info" onclick="render()">Search</button></div>
+            <div class="field mb-4">
+                <label class="checkbox">
+                    <input type="checkbox" id="showFlaggedOnly" onchange="renderUsers()">
+                    Show flagged-for-deletion only
+                </label>
+            </div>
+            <div id="appUsers"><p class="has-text-grey">Loading…</p></div>
         </div>
 
-        <div class="field mb-4">
-            <label class="checkbox">
-                <input type="checkbox" id="showFlaggedOnly" onchange="render()">
-                Show flagged-for-deletion only
-            </label>
+        <!-- Feedback tab -->
+        <div id="panelFeedback" style="display:none;">
+            <div id="appFeedback"><p class="has-text-grey">Loading…</p></div>
         </div>
-
-        <div id="app"><p class="has-text-grey">Loading…</p></div>
     </div>
 
     <script>
-        let allUsers = [];
-        const session = new URLSearchParams(window.location.search).get('session') || '';
+        let allUsers    = [];
+        let allFeedback = [];
+        const session   = new URLSearchParams(window.location.search).get('session') || '';
 
-        async function loadData() {
+        // Tab switching
+        // ----------------------------------------------------------------
+        function switchTab(tab) {
+            document.getElementById('tabUsers').classList.toggle('is-active', tab === 'users');
+            document.getElementById('tabFeedback').classList.toggle('is-active', tab === 'feedback');
+            document.getElementById('panelUsers').style.display    = tab === 'users'    ? '' : 'none';
+            document.getElementById('panelFeedback').style.display = tab === 'feedback' ? '' : 'none';
+            if (tab === 'feedback') renderFeedback();
+        }
+
+        // Load all data
+        // ----------------------------------------------------------------
+        async function loadAll() {
+            await Promise.all([loadUsers(), loadFeedback()]);
+        }
+
+        async function loadUsers() {
             try {
                 const res = await fetch(`/api/admin/users?session=${session}`);
                 if (res.status === 401 || res.status === 403) {
-                    document.getElementById('app').innerHTML = '<p class="has-text-danger">Access denied.</p>';
+                    document.getElementById('appUsers').innerHTML = '<p class="has-text-danger">Access denied.</p>';
                     return;
                 }
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 allUsers = await res.json();
-                render();
+                renderUsers();
             } catch (err) {
-                document.getElementById('app').innerHTML = `<p class="has-text-danger">Error: ${err.message}</p>`;
+                document.getElementById('appUsers').innerHTML = `<p class="has-text-danger">Error: ${err.message}</p>`;
             }
         }
 
-        function render() {
+        async function loadFeedback() {
+            try {
+                const res = await fetch(`/api/admin/feedback?session=${session}`);
+                if (!res.ok) return;
+                allFeedback = await res.json();
+                const badge = document.getElementById('feedbackBadge');
+                if (allFeedback.length) {
+                    badge.textContent = allFeedback.length;
+                    badge.style.display = '';
+                } else {
+                    badge.style.display = 'none';
+                }
+            } catch (_) {}
+        }
+
+        // Render users
+        // ----------------------------------------------------------------
+        function renderUsers() {
             const query       = document.getElementById('searchInput').value.toLowerCase();
             const flaggedOnly = document.getElementById('showFlaggedOnly').checked;
+            const users       = allUsers.filter(u => u.name.toLowerCase().includes(query));
 
-            const users = allUsers.filter(u => u.name.toLowerCase().includes(query));
             if (!users.length) {
-                document.getElementById('app').innerHTML = '<p class="has-text-centered has-text-grey my-6">No users found.</p>';
+                document.getElementById('appUsers').innerHTML = '<p class="has-text-centered has-text-grey my-6">No users found.</p>';
                 return;
             }
 
-            document.getElementById('app').innerHTML = users.map(user => {
-                const dashboards = user.dashboards || [];
-
-                // Collect all data entries across all dashboards for flaggedOnly filter
-                const allEntries = dashboards.flatMap(d => (d.data || []).map(e => ({...e, dashName: d.name, dashId: d.id})));
-                const flaggedEntries = allEntries.filter(e => e.deleted);
-
-                if (flaggedOnly && flaggedEntries.length === 0) return '';
-
-                const flaggedCount = flaggedEntries.length;
+            document.getElementById('appUsers').innerHTML = users.map(user => {
+                const dashboards    = user.dashboards || [];
+                const allEntries    = dashboards.flatMap(d => (d.data || []).map(e => ({...e, dashName: d.name, dashId: d.id})));
+                const flaggedData   = allEntries.filter(e => e.deleted);
+                const flaggedDashes = dashboards.filter(d => d.deleted);
+                if (flaggedOnly && flaggedData.length === 0 && flaggedDashes.length === 0) return '';
+                const flaggedCount  = flaggedData.length + flaggedDashes.length;
 
                 return `
                 <div class="box user-card p-4">
@@ -101,15 +148,22 @@
                         : dashboards.map(dash => {
                             let entries = dash.data || [];
                             if (flaggedOnly) entries = entries.filter(e => e.deleted);
-                            if (flaggedOnly && entries.length === 0) return '';
+                            if (flaggedOnly && entries.length === 0 && !dash.deleted) return '';
 
-                            return `<div class="dash-card">
+                            return `<div class="dash-card ${dash.deleted ? 'dash-flagged' : ''}">
                                 <div class="is-flex is-justify-content-space-between is-align-items-center mb-2">
-                                    <strong>📁 ${dash.name}</strong>
-                                    <span class="badge">${(dash.data||[]).length} entries</span>
+                                    <div>
+                                        <strong>📁 ${dash.name}</strong>
+                                        <span class="badge">${(dash.data||[]).length} entries</span>
+                                        ${dash.deleted ? '<span class="has-text-danger is-size-7 ml-2"><i class="fas fa-flag"></i> flagged for deletion</span>' : ''}
+                                    </div>
+                                    <button class="button is-danger is-small" title="Permanently delete this dashboard"
+                                        onclick="deleteDashboard(${dash.id}, '${dash.name}')">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
                                 </div>
                                 ${entries.length === 0
-                                    ? '<p class="has-text-grey is-size-7">No entries.</p>'
+                                    ? '<p class="has-text-grey is-size-7">No data entries.</p>'
                                     : entries.map(d => `
                                         <div class="data-row is-flex is-justify-content-space-between is-align-items-center ${d.deleted ? 'flagged-row' : ''}">
                                             <div>
@@ -119,11 +173,11 @@
                                             </div>
                                             <div class="buttons mb-0" style="gap:4px">
                                                 ${d.deleted
-                                                    ? `<button class="button is-success is-small" 
-                                                        title="Un-flags entry. User must click the red box to re-generate data."
-                                                        onclick="restoreData(${d.id})">
-                                                        <i class="fas fa-undo mr-1"></i>Restore
-                                                    </button>`
+                                                    ? `<button class="button is-success is-small"
+                                                           title="Un-flags entry. User must click to re-generate data."
+                                                           onclick="restoreData(${d.id})">
+                                                           <i class="fas fa-undo mr-1"></i>Restore
+                                                       </button>`
                                                     : ''}
                                                 <button class="button is-danger is-small ${d.deleted ? '' : 'is-outlined'}"
                                                     onclick="deleteData(${d.id},'${d.symbol_name}','${d.timeframe}')">
@@ -140,28 +194,72 @@
             }).join('');
         }
 
+        // Render feedback
+        // ----------------------------------------------------------------
+        function renderFeedback() {
+            if (!allFeedback.length) {
+                document.getElementById('appFeedback').innerHTML = '<p class="has-text-grey">No feedback messages.</p>';
+                return;
+            }
+            document.getElementById('appFeedback').innerHTML = allFeedback.map(m => `
+                <div class="box feedback-card p-4">
+                    <div class="is-flex is-justify-content-space-between is-align-items-start">
+                        <div style="flex:1; margin-right:12px;">
+                            <p class="is-size-7 has-text-grey mb-1">
+                                <strong>${m.username}</strong> &middot; ${new Date(m.sent_at).toLocaleString()}
+                            </p>
+                            <p style="white-space:pre-wrap;">${m.message}</p>
+                        </div>
+                        <button class="button is-danger is-small is-outlined" onclick="dismissFeedback(${m.id})">
+                            <i class="fas fa-times mr-1"></i>Dismiss
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Actions
+        // ----------------------------------------------------------------
         async function deleteUser(userId, name) {
             if (!confirm(`Permanently delete user "${name}" and ALL their data?`)) return;
             const res = await fetch(`/api/admin/users/${userId}?session=${session}`, { method: 'DELETE' });
             if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
-            loadData();
+            loadAll();
+        }
+
+        async function deleteDashboard(dashId, name) {
+            if (!confirm(`Permanently delete dashboard "${name}" and ALL its data?`)) return;
+            const res = await fetch(`/api/admin/dashboard/${dashId}?session=${session}`, { method: 'DELETE' });
+            if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
+            loadAll();
         }
 
         async function deleteData(dataId, sym, tf) {
             if (!confirm(`Permanently delete ${sym} [${tf}]?`)) return;
             const res = await fetch(`/api/admin/data/${dataId}?session=${session}`, { method: 'DELETE' });
             if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
-            loadData();
+            loadAll();
         }
 
         async function restoreData(dataId) {
             if (!confirm('Restore this entry?')) return;
             const res = await fetch(`/api/admin/data/${dataId}/restore?session=${session}`, { method: 'POST' });
             if (!res.ok) { alert(`Failed: ${(await res.json()).detail}`); return; }
-            loadData();
+            loadAll();
         }
 
-        loadData();
+        async function dismissFeedback(msgId) {
+            if (!confirm('Dismiss this message?')) return;
+            const res = await fetch(`/api/admin/delete_feedback/${msgId}?session=${session}`, { method: 'DELETE' });
+            if (!res.ok) { alert('Failed to dismiss.'); return; }
+            allFeedback = allFeedback.filter(m => m.id !== msgId);
+            const badge = document.getElementById('feedbackBadge');
+            badge.textContent = allFeedback.length;
+            if (!allFeedback.length) badge.style.display = 'none';
+            renderFeedback();
+        }
+
+        loadAll();
     </script>
 </body>
 </html>

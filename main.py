@@ -17,29 +17,26 @@ from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# ---------------------------------------------------------------------------
 # Config — swap these out for real values
 # ---------------------------------------------------------------------------
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
-SMTP_USER = "name@gmail.com"
-SMTP_PASSWORD = "APP PASSWORD HERE"
-SMTP_FROM = "QuantOracle <name@gmail.com>"
+
+SMTP_USER = "your@gmail.com"
+SMTP_PASSWORD = "your_app_password"
+SMTP_FROM = "QuantOracle <your@gmail.com>"
 
 DATA_ROOT = Path("data")  # ./data/{user_id}/{symbol}/{timeframe}.json
 
-SESSION_TTL_MINUTES = 30  # refreshed on every authed action
+SESSION_TTL_MINUTES = 30  # refreshed on every authenticated action
 RECOVERY_TTL_MINUTES = 30  # one-time OTP window
 
 app = FastAPI()
 api = APIRouter(prefix="/api")
 
 
-# ---------------------------------------------------------------------------
 # DB
 # ---------------------------------------------------------------------------
-
-
 @contextmanager
 def get_conn():
     conn = psycopg2.connect(
@@ -55,11 +52,8 @@ def get_conn():
         conn.close()
 
 
-# ---------------------------------------------------------------------------
 # Password helpers
 # ---------------------------------------------------------------------------
-
-
 def _hash(password: str) -> str:
     return bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt()).decode()
 
@@ -68,11 +62,8 @@ def _verify(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode()[:72], hashed.encode())
 
 
-# ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
-
-
 def _new_expiry(minutes: int = SESSION_TTL_MINUTES) -> datetime:
     return datetime.now(timezone.utc) + timedelta(minutes=minutes)
 
@@ -142,11 +133,8 @@ def validate_admin_session(session_id: str, refresh: bool = True) -> int:
     return admin_id
 
 
-# ---------------------------------------------------------------------------
 # Email
 # ---------------------------------------------------------------------------
-
-
 def send_email(to: str, subject: str, body: str) -> None:
     msg = MIMEText(body)
     msg["Subject"] = subject
@@ -158,11 +146,8 @@ def send_email(to: str, subject: str, body: str) -> None:
         s.sendmail(SMTP_FROM, [to], msg.as_string())
 
 
-# ---------------------------------------------------------------------------
 # AlphaVantage helper
 # ---------------------------------------------------------------------------
-
-# AlphaVantage function + response key per timeframe
 _AV_CONFIG = {
     "5M": ("TIME_SERIES_INTRADAY", "Time Series (5min)", "&interval=5min"),
     "1H": ("TIME_SERIES_INTRADAY", "Time Series (60min)", "&interval=60min"),
@@ -220,13 +205,10 @@ def series_to_candles(series: dict) -> list[dict]:
     return candles
 
 
-# ---------------------------------------------------------------------------
 # File storage helpers
 # data_path: data/{user_id}/{SYMBOL}/{timeframe}.json
 # pred_path: data/{user_id}/{SYMBOL}/{timeframe}_preds.json  (ML, future)
 # ---------------------------------------------------------------------------
-
-
 def data_path(user_id: int, symbol: str, timeframe: str) -> Path:
     return DATA_ROOT / str(user_id) / symbol / f"{timeframe}.json"
 
@@ -274,11 +256,8 @@ def read_preds(user_id: int, symbol: str, timeframe: str) -> tuple[list[dict], d
     return raw, {"upper": [], "lower": []}
 
 
-# ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
-
-
 class UserAuth(BaseModel):
     username: str
     password: str
@@ -295,11 +274,8 @@ class RecoveryConfirm(BaseModel):
     new_password: str
 
 
-# ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
-
-
 @api.post("/register")
 def api_register(auth: UserAuth):
     if not auth.email:
@@ -380,9 +356,6 @@ def api_recover_request(body: RecoveryRequest):
         otp = "".join(random.choices(string.digits, k=6))
         sid = str(uuid.uuid4())
         with conn.cursor() as cur:
-            # Store OTP in session id field hack — we store otp in a separate column
-            # For simplicity: encode otp into the session row via a dedicated table later;
-            # for now store as "otp:{code}" in type field with RECOVERY prefix
             cur.execute(
                 "INSERT INTO session (id, user_id, type, expires_at) VALUES (%s, %s, %s, %s)",
                 (sid, user_id, f"RECOVERY:{otp}", _new_expiry(RECOVERY_TTL_MINUTES)),
@@ -436,7 +409,6 @@ def api_recover_confirm(body: RecoveryConfirm):
     return {"status": "success", "message": "Password updated"}
 
 
-# ---------------------------------------------------------------------------
 # Dashboard endpoints
 # POST /api/dashboard/?session=…&action=…
 #
@@ -453,10 +425,9 @@ def api_recover_confirm(body: RecoveryConfirm):
 #   RESTORE   — admin un-flags a data entry
 #   DELETE    — admin hard-deletes a data entry
 # ---------------------------------------------------------------------------
-
-
 @api.post("/dashboard/")
 def dashboard_ep(
+    background_tasks: BackgroundTasks,
     session: str,
     action: str,
     dash_id: int | None = None,
@@ -472,7 +443,7 @@ def dashboard_ep(
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, delete_set FROM dashboard WHERE user_id = %s ORDER BY id",
+                    "SELECT id, name, delete_set FROM dashboard WHERE user_id = %s AND delete_set = FALSE ORDER BY id",
                     (user_id,),
                 )
                 dashboards = cur.fetchall()
@@ -566,6 +537,12 @@ def dashboard_ep(
                 if not cur.fetchone():
                     raise HTTPException(404, "Dashboard not found")
 
+        # Wipe any existing files for this symbol/timeframe so stale data is gone
+        for wipe_fn in (data_path, pred_path, model_path, lock_path):
+            p = wipe_fn(user_id, index.upper(), time)
+            if p.exists():
+                p.unlink()
+
         # Pull AV data if key provided
         candles = None
         fpath = None
@@ -587,7 +564,8 @@ def dashboard_ep(
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (dashboard_id, symbol_name, timeframe)
                     DO UPDATE SET
-                        data_path  = COALESCE(EXCLUDED.data_path, data.data_path),
+                        data_path  = EXCLUDED.data_path,
+                        model_path = NULL,
                         delete_set = FALSE
                     RETURNING id
                     """,
@@ -595,7 +573,6 @@ def dashboard_ep(
                 )
                 row = cur.fetchone()
                 if not row:
-                    # Shouldn't happen, but fall back to a SELECT
                     cur.execute(
                         "SELECT id FROM data WHERE dashboard_id=%s AND symbol_name=%s AND timeframe=%s",
                         (dash_id, index.upper(), time),
@@ -604,11 +581,22 @@ def dashboard_ep(
                 data_id = row[0]
             conn.commit()
 
+        # Auto-train
+        if fpath and api_key:
+            lp = lock_path(user_id, index.upper(), time)
+            pp = pred_path(user_id, index.upper(), time)
+            mp = model_path(user_id, index.upper(), time)
+            lp.parent.mkdir(parents=True, exist_ok=True)
+            lp.touch()
+            from stockml import train_and_predict
+
+            background_tasks.add_task(train_and_predict, fpath, pp, mp, lp, time)
+
         return {
             "status": "success",
             "data_id": data_id,
             "ready": candles is not None,
-            "data": {"data": candles, "forecast": []} if candles else None,
+            "pending": bool(fpath and api_key),
         }
 
     # ---- REGEN -------------------------------------------------------------
@@ -723,7 +711,6 @@ def dashboard_ep(
     raise HTTPException(400, f"Unknown dashboard action: {action!r}")
 
 
-# ---------------------------------------------------------------------------
 # Chart endpoint
 # POST /api/chart/?session=…&action=…&index=…&time=…&dash_id=…&api_key=…
 #
@@ -731,8 +718,6 @@ def dashboard_ep(
 #   REGEN — re-pull AV, overwrite file, return fresh data
 #   PULL  — sessionless proxy, key supplied by caller, nothing stored
 # ---------------------------------------------------------------------------
-
-
 @api.post("/chart/")
 def chart_ep(
     background_tasks: BackgroundTasks,
@@ -890,7 +875,7 @@ def chart_ep(
     # ---- REGEN -------------------------------------------------------------
     # Pull fresh data, delete old files, train new model, generate preds
     if action == "REGEN":
-        # Retrain on existing data — no AV fetch, no API key needed
+        # Retrain on existing data. No fetch cuz AV will gut you alive if you pull >25 times a day
         if not row:
             raise HTTPException(404, f"No data entry for {index} [{time}]")
         if not row[1] or not Path(row[1]).exists():
@@ -931,11 +916,8 @@ def chart_ep(
     raise HTTPException(400, f"Unknown chart action: {action!r}")
 
 
-# ---------------------------------------------------------------------------
 # Admin endpoints
 # ---------------------------------------------------------------------------
-
-
 @api.get("/admin/users")
 def admin_list_users(session: str):
     validate_admin_session(session)
@@ -945,31 +927,47 @@ def admin_list_users(session: str):
             users = cur.fetchall()
             result = []
             for uid, email, name, created in users:
+                # Fetch all dashboards first (including empty ones)
+                cur.execute(
+                    "SELECT id, name, delete_set FROM dashboard WHERE user_id = %s ORDER BY id",
+                    (uid,),
+                )
+                dash_rows = cur.fetchall()
+                dashboards: dict[int, dict] = {}
+                for did, dname, ddel in dash_rows:
+                    dashboards[did] = {
+                        "id": did,
+                        "name": dname,
+                        "deleted": ddel,
+                        "data": [],
+                    }
+
+                # Then fetch data entries and attach
                 cur.execute(
                     """
-                    SELECT d.id, d.name, da.id, da.symbol_name, da.timeframe,
+                    SELECT d.id, da.id, da.symbol_name, da.timeframe,
                            da.data_path, da.delete_set
                     FROM dashboard d
-                    JOIN data da ON da.dashboard_id = d.id
+                    LEFT JOIN data da ON da.dashboard_id = d.id
                     WHERE d.user_id = %s
                     ORDER BY d.id, da.symbol_name, da.timeframe
                     """,
                     (uid,),
                 )
                 rows = cur.fetchall()
-                dashboards: dict[int, dict] = {}
-                for did, dname, eid, sym, tf, dpath, edel in rows:
-                    if did not in dashboards:
-                        dashboards[did] = {"id": did, "name": dname, "data": []}
-                    dashboards[did]["data"].append(
-                        {
-                            "id": eid,
-                            "symbol_name": sym,
-                            "timeframe": tf,
-                            "has_data": bool(dpath and Path(dpath).exists()),
-                            "deleted": edel,
-                        }
-                    )
+                for did, eid, sym, tf, dpath, edel in rows:
+                    if eid is None:
+                        continue  # dashboard exists but has no data entries
+                    if did in dashboards:
+                        dashboards[did]["data"].append(
+                            {
+                                "id": eid,
+                                "symbol_name": sym,
+                                "timeframe": tf,
+                                "has_data": bool(dpath and Path(dpath).exists()),
+                                "deleted": edel,
+                            }
+                        )
                 result.append(
                     {
                         "id": uid,
@@ -1012,8 +1010,106 @@ def admin_restore_data(data_id: int, session: str):
     return {"status": "success"}
 
 
+# User profile endpoints
 # ---------------------------------------------------------------------------
-# Wire up router then static (static MUST be last)
+@api.post("/user/email_change")
+def user_email_change(session: str, new_email: str):
+    user_id = validate_session(session)
+    new_email = new_email.lower().strip()
+    # Basic format check
+    if "@" not in new_email or "." not in new_email.split("@")[-1]:
+        raise HTTPException(400, "2")  # misc error
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM users WHERE email = %s", (new_email,))
+                if cur.fetchone():
+                    raise HTTPException(400, "1")  # taken
+                cur.execute(
+                    "UPDATE users SET email = %s WHERE id = %s", (new_email, user_id)
+                )
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(400, "2")  # misc
+    return {"status": "0"}  # success
+
+
+@api.get("/user/profile")
+def user_profile(session: str):
+    user_id = validate_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT name, email FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "User not found")
+    return {"username": row[0], "email": row[1]}
+
+
+# Feedback endpoints
+# ---------------------------------------------------------------------------
+@api.post("/send_feedback")
+def send_feedback(session: str, message: str):
+    user_id = validate_session(session)
+    msg = message.strip()
+    if not msg:
+        raise HTTPException(400, "Message cannot be empty")
+    if len(msg) > 1000:
+        raise HTTPException(400, "Message exceeds 1000 characters")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Parameterised query prevents SQL injection
+            cur.execute(
+                "INSERT INTO messages (user_id, message) VALUES (%s, %s)",
+                (user_id, msg),
+            )
+        conn.commit()
+    return {"status": "success"}
+
+
+@api.get("/admin/feedback")
+def admin_get_feedback(session: str):
+    validate_admin_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.id, u.name, m.message, m.sent_at
+                FROM messages m
+                JOIN users u ON u.id = m.user_id
+                ORDER BY m.sent_at DESC
+                """,
+            )
+            rows = cur.fetchall()
+    return [
+        {"id": r[0], "username": r[1], "message": r[2], "sent_at": r[3].isoformat()}
+        for r in rows
+    ]
+
+
+@api.delete("/admin/delete_feedback/{message_id}")
+def admin_delete_feedback(message_id: int, session: str):
+    validate_admin_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM messages WHERE id = %s", (message_id,))
+        conn.commit()
+    return {"status": "success"}
+
+
+@api.delete("/admin/dashboard/{dash_id}")
+def admin_delete_dashboard(dash_id: int, session: str):
+    validate_admin_session(session)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM dashboard WHERE id = %s", (dash_id,))
+        conn.commit()
+    return {"status": "success"}
+
+
+# Serve static
 # ---------------------------------------------------------------------------
 app.include_router(api)
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

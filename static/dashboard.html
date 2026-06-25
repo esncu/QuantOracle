@@ -13,8 +13,7 @@
         .is-ready   { background-color: #48c78e; }
         .is-pending      { background-color: #f14668; }
         .is-premium-empty{ background-color: #f14668; }  /* red — premium but not generated */
-        .is-loading-box  { background-color: #f5a623; color:#fff; font-size:18px; line-height:32px; text-align:center; cursor:default; animation: spin 1.2s linear infinite; }
-        @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        .is-loading-box  { background-color: #f5a623; cursor:default; }
         .status-box:hover { opacity: 0.75; transform: scale(1.08); }
 
         .dash-panel { display: none; }
@@ -46,9 +45,9 @@
                     <span id="keyStatus" class="is-size-7 has-text-success" style="white-space:nowrap"></span>
                 </div>
                 <p class="is-size-7 has-text-grey mt-2" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;">
-                    <span><span style="display:inline-block;width:11px;height:11px;background:#48c78e;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Ready — click to view chart</span>
-                    <span><span style="display:inline-block;width:11px;height:11px;background:#f5a623;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Training in progress</span>
-                    <span><span style="display:inline-block;width:11px;height:11px;background:#f14668;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Not generated — click to pull &amp; train</span>
+                    <span><span style="display:inline-block;width:11px;height:11px;background:#48c78e;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Ready</span>
+                    <span><span style="display:inline-block;width:11px;height:11px;background:#f5a623;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Training</span>
+                    <span><span style="display:inline-block;width:11px;height:11px;background:#f14668;border-radius:2px;vertical-align:middle;margin-right:3px;"></span>Not generated</span>
                     <span style="color:#b7950b;font-weight:600;">5M &amp; 1H require premium AlphaVantage</span>
                 </p>
             </div>
@@ -72,6 +71,18 @@
         }
     </script>
     <script src="dashboard.js"></script>
+        <!-- Ticker examples -->
+        <div class="container mt-4">
+            <div class="box py-3 px-4">
+                <p class="is-size-7 has-text-weight-semibold has-text-grey mb-2">Example symbols you can track:</p>
+                <div id="tickerExamples"></div>
+            </div>
+        </div>
+
+        <!-- Feedback -->
+        <div class="container">
+            <div id="feedbackSection"></div>
+        </div>
     <script>
         async function insertTopbar() {
             try {
@@ -84,6 +95,8 @@
                 document.getElementById('topbar-container').appendChild(tmpl.content.cloneNode(true));
                 const _home = document.getElementById('topbar-home-link');
                 if (_home) _home.href = `dashboard.html?session=${session}`;
+                const _prof = document.getElementById('topbar-profile-link');
+                if (_prof) _prof.href = `profile.html?session=${session}`;
                 const _out = document.getElementById('topbar-logout-link');
                 if (_out) _out.href = 'login.html';
             } catch (e) { console.warn('Topbar:', e); }
