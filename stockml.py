@@ -1,5 +1,5 @@
 """
-Autoregressive single-step LSTM with MC Dropout, 
+Autoregressive single-step LSTM with MC Dropout,
 trains on absolute close prices, OHLC & price delta
 training seems to love clamping to mean
 """
@@ -110,7 +110,7 @@ def _train(normed: np.ndarray, window: int, horizon: int) -> CandleLSTM:
     if not xs:
         split = max(1, len(normed) - horizon)
         xs = [normed[:split]]
-        ys = [normed[split:, 3:4]
+        ys = [normed[split:, 3:4]]
         horizon = len(ys[0])
 
     X = torch.tensor(np.array(xs), dtype=torch.float32)  # (N, window, 4)
