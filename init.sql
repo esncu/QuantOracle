@@ -16,7 +16,8 @@ CREATE TABLE users (
     id          SERIAL PRIMARY KEY,
     email       VARCHAR(255) NOT NULL UNIQUE,
     name        VARCHAR(255) NOT NULL UNIQUE,
-    pass_hash   VARCHAR(255) NOT NULL
+    pass_hash   VARCHAR(255) NOT NULL,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- admin  (single row, rubric requirement)
@@ -46,7 +47,8 @@ CREATE TABLE dashboard (
     id         SERIAL PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name       VARCHAR(255) NOT NULL,
-    delete_set BOOLEAN NOT NULL DEFAULT FALSE
+    delete_set BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE (user_id, name)
 );
 
@@ -61,7 +63,8 @@ CREATE TABLE data (
     timeframe    VARCHAR(50) NOT NULL,
     model_path   VARCHAR(512),
     data_path    VARCHAR(512),
-    delete_set   BOOLEAN NOT NULL DEFAULT FALSE
+    delete_set   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE (dashboard_id, symbol_name, timeframe)
 );
 
