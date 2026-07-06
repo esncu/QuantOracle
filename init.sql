@@ -16,7 +16,7 @@ CREATE TABLE users (
     id          SERIAL PRIMARY KEY,
     email       VARCHAR(255) NOT NULL UNIQUE,
     name        VARCHAR(255) NOT NULL UNIQUE,
-    pass_hash   VARCHAR(255) NOT NULL,
+    pass_hash   VARCHAR(255) NOT NULL
 );
 
 -- admin  (single row, rubric requirement)
