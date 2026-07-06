@@ -46,7 +46,7 @@ CREATE TABLE dashboard (
     id         SERIAL PRIMARY KEY,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name       VARCHAR(255) NOT NULL,
-    delete_set BOOLEAN NOT NULL DEFAULT FALSE,
+    delete_set BOOLEAN NOT NULL DEFAULT FALSE
     UNIQUE (user_id, name)
 );
 
@@ -61,7 +61,7 @@ CREATE TABLE data (
     timeframe    VARCHAR(50) NOT NULL,
     model_path   VARCHAR(512),
     data_path    VARCHAR(512),
-    delete_set   BOOLEAN NOT NULL DEFAULT FALSE,
+    delete_set   BOOLEAN NOT NULL DEFAULT FALSE
     UNIQUE (dashboard_id, symbol_name, timeframe)
 );
 
