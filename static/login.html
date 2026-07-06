@@ -181,7 +181,7 @@
                 recoverySessionId = data.session_id;
                 document.getElementById('recoveryStep1').style.display = 'none';
                 document.getElementById('recoveryStep2').style.display = 'block';
-                setMsg('recoveryMessage', 'Code sent — check your email (or server console for testing).', 'is-info');
+                setMsg('recoveryMessage', 'Code sent. Check your email and spam folder.', 'is-info');
             } catch (e) { setMsg('recoveryMessage', e.message, 'is-danger'); }
         }
 

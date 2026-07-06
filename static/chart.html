@@ -277,25 +277,15 @@
                 const html = await resp.text();
                 const doc  = new DOMParser().parseFromString(html, 'text/html');
                 const tmpl = doc.querySelector('#topbar-template');
-                if (!tmpl) throw new Error('template tag missing');
+                if (!tmpl) throw new Error('no template tag');
                 document.getElementById('topbar-container').appendChild(tmpl.content.cloneNode(true));
                 const _home = document.getElementById('topbar-home-link');
                 if (_home) _home.href = `dashboard.html?session=${session}`;
+                const _prof = document.getElementById('topbar-profile-link');
+                if (_prof) _prof.href = `profile.html?session=${session}`;
                 const _out = document.getElementById('topbar-logout-link');
                 if (_out) _out.href = 'login.html';
-            } catch {
-                document.getElementById('topbar-container').innerHTML = `
-                    <nav class="navbar is-dark">
-                        <div class="container">
-                            <div class="navbar-brand"><span class="navbar-item has-text-white has-text-weight-bold">QuantOracle</span></div>
-                            <div class="navbar-end">
-                                <a class="navbar-item has-text-white" href="dashboard.html?session=${session}">Dashboard</a>
-                                <a class="navbar-item has-text-white" href="profile.html?session=${session}">Profile</a>
-                                <a class="navbar-item has-text-white" href="login.html">Log out</a>
-                            </div>
-                        </div>
-                    </nav>`;
-            }
+            } catch (e) { console.warn('Topbar:', e); }
         }
         insertTopbar();
 
